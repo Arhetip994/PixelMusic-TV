@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TV Navigation -->
+    <string name="tv_nav_home">Главная</string>
+    <string name="tv_nav_library">Медиатека</string>
+    <string name="tv_nav_player">Плеер</string>
+    <string name="tv_nav_search">Поиск</string>
+    <string name="tv_nav_settings">Настройки</string>
+
+    <!-- TV Library Tabs -->
+    <string name="tv_tab_all_songs">Треки</string>
+    <string name="tv_tab_favorites">Любимые</string>
+    <string name="tv_tab_albums">Альбомы</string>
+    <string name="tv_tab_artists">Исполнители</string>
+    <string name="tv_tab_playlists">Плейлисты</string>
+    <string name="tv_tab_genres">Жанры</string>
+    <string name="tv_library_empty">В этом разделе пока нет треков</string>
+    <string name="tv_genre_detail_tracks">Треков: %d</string>
+    <string name="tv_playlist_create_new">+ Создать плейлист</string>
+    <string name="tv_playlist_create_dialog_title">Новый плейлист</string>
+
+    <!-- TV Player & Tabs -->
+    <string name="tv_tab_lyrics">Текст песни</string>
+    <string name="tv_tab_queue">Очередь (%d)</string>
+    <string name="tv_fullscreen_lyrics">Во весь экран</string>
+    <string name="tv_open_karaoke_hint">Нажмите ОК для караоке на весь экран ⛶</string>
+    <string name="tv_close_karaoke">✕ Закрыть караоке [Назад]</string>
+    <string name="tv_karaoke_title">🎤 КАРАОКЕ</string>
+    <string name="tv_no_lyrics">Синхронизированный текст для этого трека не найден</string>
+    <string name="tv_queue_empty">Очередь воспроизведения пуста</string>
+    <string name="tv_nothing_playing">Сейчас ничего не играет\nВыберите трек в медиатеке</string>
+    <string name="tv_rewind_10">-10 сек</string>
+    <string name="tv_forward_10">+10 сек</string>
+
+    <!-- TV Volume & Controls -->
+    <string name="tv_volume_down">Уменьшить громкость</string>
+    <string name="tv_volume_up">Увеличить громкость</string>
+    <string name="tv_sleep_timer">Таймер сна</string>
+    <string name="tv_ambient_mode">Режим заставки</string>
+    <string name="tv_ambient_exit_hint">Нажмите любую кнопку пульта для выхода</string>
+    <string name="tv_dialog_close">Закрыть</string>
+    <string name="tv_timer_remaining">Осталось: %s</string>
+    <string name="tv_timer_end_of_track">Остановить в конце трека</string>
+    <string name="tv_timer_turn_off">Отключить таймер сна</string>
+
+    <!-- TV Settings -->
+    <string name="tv_settings_title">Настройки</string>
+    <string name="tv_settings_equalizer_title">Звук и эквалайзер</string>
+    <string name="tv_settings_equalizer_desc">Звуковые профили для динамиков ТВ и саундбаров</string>
+    <string name="tv_equalizer_dialog_title">Звуковой профиль</string>
+    <string name="tv_equalizer_bass_boost">Усиление басов (Сабвуфер)</string>
+    <string name="tv_playlist_empty">В этом плейлисте нет треков</string>
+    <string name="tv_settings_streaming">Стриминг и серверы</string>
+    <string name="tv_settings_navidrome_title">Navidrome / Subsonic</string>
+    <string name="tv_settings_navidrome_desc">Подключение к домашнему музыкальному серверу</string>
+    <string name="tv_settings_jellyfin_title">Jellyfin</string>
+    <string name="tv_settings_jellyfin_desc">Синхронизация музыки с сервером Jellyfin</string>
+    <string name="tv_settings_language_title">Язык приложения</string>
+    <string name="tv_settings_language_desc">Выбор языка интерфейса</string>
+    <string name="tv_settings_welcome_title">Приветственный экран</string>
+    <string name="tv_settings_welcome_desc">Показать мастер знакомства и добавления музыки</string>
+    <string name="tv_settings_about_title">О приложении</string>
+    <string name="tv_settings_version">Версия: %1$s (%2$d)</string>
+    <string name="tv_settings_mode">Режим: Единый универсальный APK (Mobile &amp; TV)</string>
+
+    <!-- TV Welcome Screen -->
+    <string name="tv_welcome_title">Добро пожаловать в PixelMusic</string>
+    <string name="tv_welcome_edition">TV Edition</string>
+    <string name="tv_welcome_subtitle">Музыкальный плеер с синхронизированным караоке для вашего ТВ</string>
+    <string name="tv_welcome_start">Начать слушать</string>
+    <string name="tv_welcome_start_desc">Перейти на главный экран</string>
+    <string name="tv_welcome_scan">Сканировать диск</string>
+    <string name="tv_welcome_scan_desc">Поиск в Music, Downloads и USB</string>
+    <string name="tv_welcome_scan_done">Найдено треков: %d</string>
+    <string name="tv_welcome_demo">+ Демо-треки</string>
+    <string name="tv_welcome_demo_desc">Загрузить треки для проверки</string>
+    <string name="tv_welcome_demo_done">Демо-треки добавлены!</string>
+
+    <!-- TV Home & Detail -->
+    <string name="tv_home_library">Медиатека</string>
+    <string name="tv_home_shuffle_all">Перемешать всё</string>
+    <string name="tv_section_recently_played">Недавно воспроизведенные</string>
+    <string name="tv_section_albums">Альбомы</string>
+    <string name="tv_section_artists">Исполнители</string>
+    <string name="tv_section_all_tracks">Все треки</string>
+    <string name="tv_section_daily_mix">Дневной микс</string>
+    <string name="tv_daily_mix_subtitle">Персональная подборка на сегодня</string>
+    <string name="tv_section_playlists">Плейлисты</string>
+    <string name="tv_section_genres">Жанры</string>
+    <string name="tv_track_info_title">Свойства трека</string>
+    <string name="tv_info_format">Формат</string>
+    <string name="tv_info_bitrate">Битрейт</string>
+    <string name="tv_info_sample_rate">Частота</string>
+    <string name="tv_info_duration">Длительность</string>
+    <string name="tv_info_size">Размер файла</string>
+    <string name="tv_info_path">Путь к файлу</string>
+    <string name="tv_btn_play">Слушать</string>
+    <string name="tv_btn_shuffle">Микс</string>
+    <string name="tv_search_hint">Поиск исполнителя, альбома или трека…</string>
+    <string name="tv_search_empty">Треки не найдены</string>
+
+    <!-- TV QR Connect & Streaming Accounts -->
+    <string name="tv_qr_connect_title">Подключение и передача по QR</string>
+    <string name="tv_qr_connect_desc">Передача ссылок, плейлистов и вход в аккаунты со смартфона без пульта</string>
+    <string name="tv_qr_connect_banner_btn">Передать с телефона [QR]</string>
+    <string name="tv_qr_dialog_title">Подключение смартфона по QR</string>
+    <string name="tv_qr_step1">1. Отсканируйте QR-код камерой смартфона (в одной сети Wi-Fi)</string>
+    <string name="tv_qr_step2">2. Или откройте страницу в браузере телефона:</string>
+    <string name="tv_qr_waiting">Ожидание передачи со смартфона…</string>
+    <string name="tv_qr_connected_status">Смартфон подключен</string>
+    <string name="tv_qr_received_title">Получено со смартфона:</string>
+    <string name="tv_qr_btn_play">Воспроизвести сейчас</string>
+    <string name="tv_qr_btn_add_playlist">Добавить в плейлисты</string>
+    <string name="tv_qr_btn_close">Закрыть</string>
+    <string name="tv_qr_accounts_title">Аккаунты и стриминг</string>
+    <string name="tv_account_connected">Подключено</string>
+    <string name="tv_account_disconnected">Не подключено</string>
+    <string name="tv_account_listenbrainz">ListenBrainz</string>
+    <string name="tv_account_listenbrainz_desc">Скробблинг прослушиваний</string>
+    <string name="tv_account_quick_login">Войти через QR с телефона</string>
+
+    <!-- TV Extended Strings & Search -->
+    <string name="tv_search_local_tracks">Локальные треки (%d)</string>
+    <string name="tv_search_online_tracks">YouTube Music — Онлайн (%d)</string>
+    <string name="tv_search_albums">Альбомы (%d)</string>
+    <string name="tv_search_artists">Исполнители (%d)</string>
+    <string name="tv_search_searching">Поиск по медиатеке и YouTube Music…</string>
+    <string name="tv_search_no_results">Ничего не найдено по запросу «%s»</string>
+    <string name="tv_search_initial_hint">Начните ввод для поиска по всей медиатеке и в сети YouTube Music</string>
+    <string name="tv_search_input_placeholder">Поиск треков, альбомов и артистов (локально и онлайн)</string>
+
+    <string name="tv_home_random_song">Случайный трек</string>
+    <string name="tv_home_favorite_songs">Любимые треки</string>
+    <string name="tv_home_scan_disk">Сканировать диск</string>
+    <string name="tv_home_scanning">Сканирование…</string>
+    <string name="tv_home_demo_music">+ Демо-треки</string>
+    <string name="tv_home_library_empty">Медиатека пуста</string>
+    <string name="tv_home_library_scanning">Идет сканирование медиатеки…</string>
+    <string name="tv_home_library_scanning_desc">Пожалуйста, подождите, файлы индексируются</string>
+    <string name="tv_home_library_empty_desc">Нажмите кнопку ниже, чтобы загрузить встроенную демо-музыку или просканировать папку «Загрузки» на ТВ</string>
+    <string name="tv_home_btn_load_demo">Загрузить демо-музыку</string>
+    <string name="tv_home_demo_desc">3 трека для быстрой проверки плеера и караоке</string>
+    <string name="tv_home_btn_scan_memory">Сканировать память ТВ</string>
+    <string name="tv_home_scan_memory_desc">Поиск скачанной музыки в /sdcard/Download</string>
+
+    <string name="tv_tracks_count">%d треков</string>
+    <string name="tv_timer_disable">Отключить</string>
+    <string name="tv_timer_15m">15 минут</string>
+    <string name="tv_timer_30m">30 минут</string>
+    <string name="tv_timer_45m">45 минут</string>
+    <string name="tv_timer_60m">60 минут</string>
+    <string name="tv_timer_end_of_track_option">В конце трека</string>
+    <string name="tv_welcome_select_language">Язык / Language</string>
+    <string name="tv_welcome_system_lang">Системный</string>
+    <string name="tv_btn_back">◄ Назад</string>
+    <string name="tv_lyrics_not_loaded">Текст песни пока не загружен</string>
+    <string name="tv_lyrics_search_btn">🔍 Найти синхронный текст</string>
+    <string name="tv_library_empty_favorites">Нет любимых треков. Отметьте треки сердечком в плеере!</string>
+    <string name="tv_library_empty_tracks">Список треков пуст</string>
+    <string name="tv_btn_configure">Настроить ►</string>
+    <string name="tv_btn_select">Выбрать ►</string>
+    <string name="tv_btn_open_qr">Открыть QR ►</string>
+    <string name="tv_on">ВКЛ ✓</string>
+    <string name="tv_off">ВЫКЛ</string>
+    <string name="tv_seek_hint">◄ -10 сек | +10 сек ►</string>
+    <string name="tv_info_year">Год</string>
+    <string name="tv_home_favorite_songs_count">Любимые треки (%d)</string>
+    <string name="tv_qr_code_label">Код: %s</string>
+    <string name="tv_qr_server_active">Сервер активен</string>
+    <string name="tv_qr_server_starting">Запуск сервера…</string>
+    <string name="tv_qr_instruction_step1">1. Отсканируйте QR-код камерой телефона (работает везде: с VPN и без, Wi-Fi и 4G)</string>
+    <string name="tv_qr_instruction_step2">2. Вставьте ссылку на трек или плейлист (YouTube Music) и нажмите Отправить</string>
+    <string name="tv_btn_clear">Очистить</string>
+    <string name="tv_qr_received_fallback">Передано со смартфона</string>
+    <string name="tv_unit_mb">МБ</string>
+    <string name="tv_unit_kb">КБ</string>
+    <string name="tv_toast_no_files">Файлы в /sdcard/Download и Music не найдены</string>
+    <string name="tv_toast_files_found">Найдено файлов: %d. Индексация…</string>
+    <string name="tv_toast_demo_loaded">Демо-треки загружены (%d). Синхронизация…</string>
+    <string name="tv_toast_demo_failed">Не удалось распаковать демо-треки</string>
+    <string name="tv_qr_status_loading_playlist">Загрузка плейлиста YouTube Music (InnerTube)…</string>
+    <string name="tv_qr_status_imported_playlist">✅ Импортирован YouTube плейлист: \'%1$s\' (%2$d треков)!</string>
+    <string name="tv_qr_status_failed_playlist">Не удалось загрузить плейлист</string>
+    <string name="tv_qr_status_loading_track">Загрузка трека YouTube Music (InnerTube)…</string>
+    <string name="tv_qr_msg_link_sent">Ссылка успешно отправлена на ТВ!</string>
+    <string name="tv_qr_msg_account_sent">Данные аккаунта отправлены на ТВ!</string>
+    <string name="tv_qr_status_received_link">Получена ссылка: %s</string>
+    <string name="tv_qr_status_connected_service">✅ Успешно подключено к %s!</string>
+    <string name="tv_playlist_import_default">Импорт (%d)</string>
+    <string name="tv_online_stream_failed">Не удалось воспроизвести онлайн-трек. Попробуйте еще раз.</string>
+    <string name="tv_online_loading_stream">Загрузка аудио…</string>
+</resources>

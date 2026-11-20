@@ -1,0 +1,988 @@
+package com.unshoo.pixelmusic.data.network.youtube
+
+import com.google.gson.Gson
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.unshoo.pixelmusic.data.model.ArtistRef
+import com.unshoo.pixelmusic.data.model.Song
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Pattern
+import javax.inject.Inject
+import javax.inject.Singleton
+
+data class YouTubeTrack(
+    val videoId: String,
+    val title: String,
+    val artist: String,
+    val album: String? = null,
+    val durationMs: Long = 180_000L,
+    val thumbnailUrl: String? = null
+)
+
+data class YouTubePlaylist(
+    val id: String,
+    val title: String,
+    val author: String? = null,
+    val tracks: List<YouTubeTrack> = emptyList()
+)
+
+/**
+ * YouTube Music & YouTube InnerTube API Client.
+ * Queries YouTube Music backend and YouTube search to find all tracks, singles, and collaborations,
+ * and extracts direct unthrottled audio streams via Android InnerTube client.
+ */
+@Singleton
+class InnerTubeParser @Inject constructor(
+    private val okHttpClient: OkHttpClient,
+    private val gson: Gson
+) {
+    companion object {
+        private const val BASE_URL = "https://music.youtube.com/youtubei/v1"
+        private const val YOUTUBE_SEARCH_URL = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false"
+        private const val PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        private const val SONGS_FILTER_PARAMS = "EgWKAQIIAWoSEAUQAxAJEAQQEBAKEA4QFRAR"
+        private const val VIDEOS_FILTER_PARAMS = "EgWKAQIQAWoSEAUQAxAJEAQQEBAKEA4QFRAR"
+
+        private val PLAYLIST_REGEX = Pattern.compile("(?:list=|/playlist\\?list=)([a-zA-Z0-9_-]+)")
+        private val VIDEO_REGEX = Pattern.compile("(?:v=|/watch\\?v=|/shorts/|youtu\\.be/)([a-zA-Z0-9_-]{11})")
+
+        // 4 hour stream URL expiration cache (GoogleVideo expiration is ~6 hours)
+        private const val STREAM_CACHE_TTL_MS = 4 * 60 * 60 * 1000L
+
+        fun extractPlaylistIdStatic(input: String): String? {
+            val trimmed = input.trim()
+            if (trimmed.startsWith("PL") || trimmed.startsWith("VLPL") || trimmed.startsWith("RDCLAK")) {
+                return trimmed.removePrefix("VL")
+            }
+            val matcher = PLAYLIST_REGEX.matcher(trimmed)
+            if (matcher.find()) {
+                return matcher.group(1)
+            }
+            return null
+        }
+
+        fun extractVideoIdStatic(input: String): String? {
+            val trimmed = input.trim()
+            if (trimmed.length == 11 && !trimmed.contains("/") && !trimmed.contains("?")) {
+                return trimmed
+            }
+            val matcher = VIDEO_REGEX.matcher(trimmed)
+            if (matcher.find()) {
+                return matcher.group(1)
+            }
+            return null
+        }
+
+        /**
+         * Upgrades low-resolution YouTube/Google thumbnails to high resolution (up to 1200x1200 or 720p).
+         */
+        fun upgradeArtworkUrl(url: String?, videoId: String? = null): String? {
+            if (url.isNullOrBlank()) {
+                return if (!videoId.isNullOrBlank()) "https://i.ytimg.com/vi/$videoId/maxresdefault.jpg" else null
+            }
+            // Google User Content (YouTube Music album art: upgrade to pristine 1200x1200)
+            if (url.contains("googleusercontent.com")) {
+                val baseUrl = url.substringBefore("=")
+                return "$baseUrl=w1200-h1200-l90-rj"
+            }
+            // YouTube video thumbnail (upgrade to maxresdefault for 1080p/4K TVs)
+            if (url.contains("i.ytimg.com") || url.contains("img.youtube.com")) {
+                return url.replace(Regex("/(default|mqdefault|hqdefault|sddefault)\\.jpg"), "/maxresdefault.jpg")
+            }
+            return url
+        }
+
+        /**
+         * Normalizes queries and handles common typos (e.g. Weekend -> Weeknd, Timless -> Timeless).
+         */
+        fun normalizeSearchQuery(q: String): String {
+            var s = q.replace(" - ", " ").replace("-", " ")
+            s = s.replace(Regex("""\bweekend\b""", RegexOption.IGNORE_CASE), "Weeknd")
+            s = s.replace(Regex("""\btimless\b""", RegexOption.IGNORE_CASE), "Timeless")
+            s = s.replace(Regex("""\bplayboy\s*carti\b""", RegexOption.IGNORE_CASE), "Playboi Carti")
+            s = s.replace(Regex("""\bthe\s*weedkn\b""", RegexOption.IGNORE_CASE), "The Weeknd")
+            return s.trim()
+        }
+
+        /**
+         * Cleans junk like '(Official Video)', '(Lyrics)', etc. from YouTube titles and extracts real artist/title.
+         */
+        fun cleanTitleAndArtist(rawTitle: String, rawArtist: String): Pair<String, String> {
+            val noiseRegex = Regex("""\s*[\(\[](official\s*(music\s*)?video|video|lyrics?|visualizer|audio|hd|hq|4k|mv|клип|премьера)[\)\]]""", RegexOption.IGNORE_CASE)
+            var t = rawTitle.replace(noiseRegex, "").trim()
+            val a = rawArtist.trim()
+
+            val delims = listOf(" - ", " — ", " – ")
+            val delim = delims.firstOrNull { t.contains(it) }
+
+            if (delim != null) {
+                val parts = t.split(delim, limit = 2)
+                val p0 = parts[0].trim()
+                val p1 = parts[1].trim()
+
+                // Check if reversed: e.g. Song - Artist ft Other
+                val p1Lower = " ${p1.lowercase()} "
+                val p0Lower = " ${p0.lowercase()} "
+                val hasFeat1 = p1Lower.contains(" ft ") || p1Lower.contains(" feat ")
+                val hasFeat0 = p0Lower.contains(" ft ") || p0Lower.contains(" feat ")
+
+                val isReversed = hasFeat1 && !hasFeat0 && p0.split(" ").size <= 2 &&
+                        listOf("the", "playboi", "lil", "young", "dj", "travis", "kanye", "weeknd").any { p1.lowercase().startsWith(it) }
+
+                var candArtist = if (isReversed) p1 else p0
+                var candTitle = if (isReversed) p0 else p1
+
+                // Extract feat from candTitle into artist
+                val featParenRegex = Regex("""\s*[\(\[](?:feat|ft)\.?\s+([^\)\]]+)[\)\]]""", RegexOption.IGNORE_CASE)
+                val matchParen = featParenRegex.find(candTitle)
+                if (matchParen != null) {
+                    val featured = matchParen.groupValues[1].trim()
+                    candArtist = "$candArtist, $featured"
+                    candTitle = candTitle.replace(featParenRegex, "").trim()
+                } else {
+                    val featBareRegex = Regex("""\s+\b(?:feat|ft)\.?\s+(.+)$""", RegexOption.IGNORE_CASE)
+                    val matchBare = featBareRegex.find(candTitle)
+                    if (matchBare != null) {
+                        val featured = matchBare.groupValues[1].trim()
+                        candArtist = "$candArtist, $featured"
+                        candTitle = candTitle.replace(featBareRegex, "").trim()
+                    }
+                }
+
+                candArtist = candArtist.replace(Regex("""\s+\b(?:feat|ft)\.?\s+""", RegexOption.IGNORE_CASE), ", ")
+                candArtist = candArtist.replace(Regex("""\s*[\(\[](?:feat|ft)\.?\s*([^\)\]]+)[\)\]]""", RegexOption.IGNORE_CASE), ", $1")
+                candArtist = candArtist.replace('&', ',').replace("  ", " ").trim(' ', ',')
+                candTitle = candTitle.replace(noiseRegex, "").trim()
+
+                return Pair(candTitle.ifBlank { rawTitle }, candArtist.ifBlank { a.ifBlank { "YouTube Music" } })
+            }
+
+            return Pair(t.ifBlank { rawTitle }, a.ifBlank { "YouTube Music" })
+        }
+    }
+
+    private val streamUrlCache = ConcurrentHashMap<String, Pair<String, Long>>()
+
+    fun extractPlaylistId(input: String): String? = extractPlaylistIdStatic(input)
+
+    fun extractVideoId(input: String): String? = extractVideoIdStatic(input)
+
+    /**
+     * Parses a YouTube Music playlist by URL or ID.
+     */
+    suspend fun parsePlaylist(urlOrId: String, region: String = "US"): YouTubePlaylist? = withContext(Dispatchers.IO) {
+        val playlistId = extractPlaylistId(urlOrId) ?: urlOrId.trim()
+        val browseId = if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
+
+        val payload = JsonObject().apply {
+            add("context", createWebRemixContext(region))
+            addProperty("browseId", browseId)
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/browse?prettyPrint=false")
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Referer", "https://music.youtube.com/")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Timber.w("InnerTube parsePlaylist failed with HTTP ${response.code}")
+                return@withContext null
+            }
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            var playlistTitle = "YouTube Playlist"
+            try {
+                val tabs = json.getAsJsonObject("contents")
+                    ?.getAsJsonObject("twoColumnBrowseResultsRenderer")
+                    ?.getAsJsonArray("tabs")
+                if (tabs != null && tabs.size() > 0) {
+                    val sec = tabs.get(0).asJsonObject
+                        .getAsJsonObject("tabRenderer")
+                        ?.getAsJsonObject("content")
+                        ?.getAsJsonObject("sectionListRenderer")
+                        ?.getAsJsonArray("contents")
+                    if (sec != null && sec.size() > 0) {
+                        val header = sec.get(0).asJsonObject.getAsJsonObject("musicResponsiveHeaderRenderer")
+                        header?.getAsJsonObject("title")
+                            ?.getAsJsonArray("runs")?.let { runs ->
+                                if (runs.size() > 0) {
+                                    playlistTitle = runs.get(0).asJsonObject.get("text").asString
+                                }
+                            }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Error parsing playlist title")
+            }
+
+            val tracks = mutableListOf<YouTubeTrack>()
+            try {
+                val secContents = json.getAsJsonObject("contents")
+                    ?.getAsJsonObject("twoColumnBrowseResultsRenderer")
+                    ?.getAsJsonObject("secondaryContents")
+                    ?.getAsJsonObject("sectionListRenderer")
+                    ?.getAsJsonArray("contents")
+
+                if (secContents != null && secContents.size() > 0) {
+                    val shelf = secContents.get(0).asJsonObject.getAsJsonObject("musicPlaylistShelfRenderer")
+                    val items = shelf?.getAsJsonArray("contents") ?: return@withContext null
+
+                    for (i in 0 until items.size()) {
+                        val item = items.get(i).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer") ?: continue
+                        val parsed = parseResponsiveListItem(item)
+                        if (parsed != null) {
+                            tracks.add(parsed)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Error parsing playlist tracks")
+            }
+
+            Timber.d("InnerTube parsed playlist: '$playlistTitle' with ${tracks.size} tracks")
+            return@withContext YouTubePlaylist(
+                id = playlistId,
+                title = playlistTitle,
+                tracks = tracks
+            )
+        } catch (e: Exception) {
+            Timber.e(e, "Exception in InnerTube parsePlaylist")
+            null
+        }
+    }
+
+    /**
+     * Searches YouTube Music and YouTube Web concurrently.
+     * Integrates Songs, Videos, and general Web searches to guarantee finding
+     * hit singles, collaborations, and misspellings (e.g. The Weekend - Timless).
+     */
+    suspend fun searchSongs(query: String, region: String = "US"): List<YouTubeTrack> = coroutineScope {
+        val trimmedQuery = query.trim()
+        if (trimmedQuery.isBlank()) return@coroutineScope emptyList()
+
+        val normalized = normalizeSearchQuery(trimmedQuery)
+
+        // Parallel fan-out across multiple YouTube / YouTube Music endpoints
+        val videosDeferred = async(Dispatchers.IO) {
+            executeSearchQuery(query = normalized, params = VIDEOS_FILTER_PARAMS, region = region)
+        }
+        val webExactDeferred = async(Dispatchers.IO) {
+            executeYouTubeWebSearch(query = normalized)
+        }
+        val webAudioDeferred = async(Dispatchers.IO) {
+            executeYouTubeWebSearch(query = "$normalized official audio")
+        }
+        val generalDeferred = async(Dispatchers.IO) {
+            executeSearchQuery(query = normalized, params = null, region = region)
+        }
+        val songsDeferred = async(Dispatchers.IO) {
+            executeSearchQuery(query = normalized, params = SONGS_FILTER_PARAMS, region = region)
+        }
+
+        val videosList = try { videosDeferred.await() } catch (_: Exception) { emptyList() }
+        val webExactList = try { webExactDeferred.await() } catch (_: Exception) { emptyList() }
+        val webAudioList = try { webAudioDeferred.await() } catch (_: Exception) { emptyList() }
+        val generalList = try { generalDeferred.await() } catch (_: Exception) { emptyList() }
+        val songsList = try { songsDeferred.await() } catch (_: Exception) { emptyList() }
+
+        val combined = mutableListOf<YouTubeTrack>()
+        val seen = mutableSetOf<String>()
+
+        fun addAllUnique(list: List<YouTubeTrack>) {
+            for (track in list) {
+                if (seen.add(track.videoId)) {
+                    combined.add(track)
+                }
+            }
+        }
+
+        addAllUnique(videosList)
+        addAllUnique(webExactList)
+        addAllUnique(webAudioList)
+        addAllUnique(songsList)
+        addAllUnique(generalList)
+
+        // Relevance ranking
+        val queryWords = normalized.lowercase().split(Regex("\\s+")).filter { it.length >= 2 }
+        val ranked = combined.sortedByDescending { track ->
+            var score = 0
+            val tLower = track.title.lowercase()
+            val aLower = track.artist.lowercase()
+
+            var titleMatches = 0
+            var artistMatches = 0
+            for (w in queryWords) {
+                if (tLower.contains(w)) {
+                    score += 25
+                    titleMatches++
+                }
+                if (aLower.contains(w)) {
+                    score += 20
+                    artistMatches++
+                }
+            }
+            if (tLower.equals(normalized, ignoreCase = true)) score += 60
+            if (tLower.startsWith(normalized, ignoreCase = true)) score += 30
+            if (titleMatches > 0 && artistMatches > 0) score += 40
+            score
+        }
+
+        Timber.d("InnerTube search for '$trimmedQuery' (norm: '$normalized') returned ${ranked.size} tracks")
+        ranked.take(40)
+    }
+
+    private fun executeSearchQuery(query: String, params: String?, region: String): List<YouTubeTrack> {
+        val payload = JsonObject().apply {
+            add("context", createWebRemixContext(region))
+            addProperty("query", query)
+            if (!params.isNullOrBlank()) {
+                addProperty("params", params)
+            }
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/search?prettyPrint=false")
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Referer", "https://music.youtube.com/")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return emptyList()
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            val tabs = json.getAsJsonObject("contents")
+                ?.getAsJsonObject("tabbedSearchResultsRenderer")
+                ?.getAsJsonArray("tabs") ?: return emptyList()
+
+            if (tabs.size() == 0) return emptyList()
+
+            val secList = tabs.get(0).asJsonObject
+                .getAsJsonObject("tabRenderer")
+                ?.getAsJsonObject("content")
+                ?.getAsJsonObject("sectionListRenderer")
+                ?.getAsJsonArray("contents") ?: return emptyList()
+
+            val results = mutableListOf<YouTubeTrack>()
+
+            for (i in 0 until secList.size()) {
+                val secObj = secList.get(i).asJsonObject
+
+                // musicShelfRenderer
+                secObj.getAsJsonObject("musicShelfRenderer")?.let { shelf ->
+                    shelf.getAsJsonArray("contents")?.let { items ->
+                        for (j in 0 until items.size()) {
+                            items.get(j).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer")?.let { item ->
+                                parseResponsiveListItem(item)?.let { results.add(it) }
+                            }
+                        }
+                    }
+                }
+
+                // itemSectionRenderer
+                secObj.getAsJsonObject("itemSectionRenderer")?.let { itemSec ->
+                    itemSec.getAsJsonArray("contents")?.let { items ->
+                        for (j in 0 until items.size()) {
+                            items.get(j).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer")?.let { item ->
+                                parseResponsiveListItem(item)?.let { results.add(it) }
+                            }
+                        }
+                    }
+                }
+
+                // musicCardShelfRenderer (Top Result card)
+                secObj.getAsJsonObject("musicCardShelfRenderer")?.let { card ->
+                    parseMusicCardShelf(card)?.let { results.add(it) }
+                    card.getAsJsonArray("contents")?.let { cardContents ->
+                        for (j in 0 until cardContents.size()) {
+                            cardContents.get(j).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer")?.let { item ->
+                                parseResponsiveListItem(item)?.let { results.add(it) }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return results
+        } catch (e: Exception) {
+            Timber.e(e, "Exception in executeSearchQuery for '$query'")
+            return emptyList()
+        }
+    }
+
+    /**
+     * Executes a search on regular YouTube to retrieve spell-corrected and widely popular videos.
+     */
+    private fun executeYouTubeWebSearch(query: String): List<YouTubeTrack> {
+        val client = JsonObject().apply {
+            addProperty("clientName", "WEB")
+            addProperty("clientVersion", "2.20240101.01.00")
+            addProperty("hl", "en")
+            addProperty("gl", "US")
+        }
+        val payload = JsonObject().apply {
+            add("context", JsonObject().apply { add("client", client) })
+            addProperty("query", query)
+        }
+
+        try {
+            val request = Request.Builder()
+                .url(YOUTUBE_SEARCH_URL)
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return emptyList()
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            val results = mutableListOf<YouTubeTrack>()
+            val contents = json.getAsJsonObject("contents")
+                ?.getAsJsonObject("twoColumnSearchResultsRenderer")
+                ?.getAsJsonObject("primaryContents")
+                ?.getAsJsonObject("sectionListRenderer")
+                ?.getAsJsonArray("contents") ?: return emptyList()
+
+            for (i in 0 until contents.size()) {
+                val sec = contents.get(i).asJsonObject
+                val itemSection = sec.getAsJsonObject("itemSectionRenderer") ?: continue
+                val items = itemSection.getAsJsonArray("contents") ?: continue
+
+                for (j in 0 until items.size()) {
+                    val vr = items.get(j).asJsonObject.getAsJsonObject("videoRenderer") ?: continue
+                    val vid = vr.get("videoId")?.asString ?: continue
+                    val rawTitle = vr.getAsJsonObject("title")?.getAsJsonArray("runs")?.get(0)?.asJsonObject?.get("text")?.asString ?: "Unknown Title"
+                    val rawArtist = vr.getAsJsonObject("ownerText")?.getAsJsonArray("runs")?.get(0)?.asJsonObject?.get("text")?.asString
+                        ?: vr.getAsJsonObject("shortBylineText")?.getAsJsonArray("runs")?.get(0)?.asJsonObject?.get("text")?.asString
+                        ?: "YouTube"
+
+                    val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(rawTitle, rawArtist)
+
+                    val durationStr = vr.getAsJsonObject("lengthText")?.get("simpleText")?.asString.orEmpty()
+                    val durationMs = parseDurationMs(durationStr)
+
+                    var thumbUrl: String? = null
+                    val thumbs = vr.getAsJsonObject("thumbnail")?.getAsJsonArray("thumbnails")
+                    if (thumbs != null && thumbs.size() > 0) {
+                        thumbUrl = thumbs.get(thumbs.size() - 1).asJsonObject.get("url")?.asString
+                    }
+                    val highResThumb = upgradeArtworkUrl(thumbUrl, vid)
+
+                    results.add(
+                        YouTubeTrack(
+                            videoId = vid,
+                            title = cleanedTitle,
+                            artist = cleanedArtist,
+                            album = "YouTube",
+                            durationMs = durationMs,
+                            thumbnailUrl = highResThumb
+                        )
+                    )
+                }
+            }
+            return results
+        } catch (e: Exception) {
+            Timber.e(e, "Exception in executeYouTubeWebSearch for '$query'")
+            return emptyList()
+        }
+    }
+
+    private fun parseResponsiveListItem(item: JsonObject): YouTubeTrack? {
+        try {
+            var videoId: String? = item.getAsJsonObject("playlistItemData")?.get("videoId")?.asString
+            val flexColumns = item.getAsJsonArray("flexColumns") ?: return null
+
+            if (videoId.isNullOrBlank() && flexColumns.size() > 0) {
+                videoId = flexColumns.get(0).asJsonObject
+                    .getAsJsonObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.getAsJsonObject("text")
+                    ?.getAsJsonArray("runs")?.get(0)?.asJsonObject
+                    ?.getAsJsonObject("navigationEndpoint")
+                    ?.getAsJsonObject("watchEndpoint")
+                    ?.get("videoId")?.asString
+            }
+
+            if (videoId.isNullOrBlank()) {
+                videoId = item.getAsJsonObject("overlay")
+                    ?.getAsJsonObject("musicItemThumbnailOverlayRenderer")
+                    ?.getAsJsonObject("content")
+                    ?.getAsJsonObject("musicPlayButtonRenderer")
+                    ?.getAsJsonObject("playNavigationEndpoint")
+                    ?.getAsJsonObject("watchEndpoint")
+                    ?.get("videoId")?.asString
+            }
+
+            if (videoId.isNullOrBlank()) return null
+
+            var title = "Unknown Title"
+            if (flexColumns.size() > 0) {
+                val col0 = flexColumns.get(0).asJsonObject
+                    .getAsJsonObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.getAsJsonObject("text")
+                    ?.getAsJsonArray("runs")
+                if (col0 != null && col0.size() > 0) {
+                    title = col0.get(0).asJsonObject.get("text")?.asString ?: title
+                }
+            }
+
+            var artist = "YouTube Music"
+            var album: String? = null
+            var durationMs = 180_000L
+
+            if (flexColumns.size() > 1) {
+                val col1Runs = flexColumns.get(1).asJsonObject
+                    .getAsJsonObject("musicResponsiveListItemFlexColumnRenderer")
+                    ?.getAsJsonObject("text")
+                    ?.getAsJsonArray("runs")
+
+                if (col1Runs != null && col1Runs.size() > 0) {
+                    val texts = mutableListOf<String>()
+                    for (k in 0 until col1Runs.size()) {
+                        val txt = col1Runs.get(k).asJsonObject.get("text")?.asString.orEmpty().trim()
+                        if (txt.isNotEmpty() && txt != "•" && txt != "·" && !isCategoryBadge(txt)) {
+                            texts.add(txt)
+                        }
+                    }
+
+                    if (texts.isNotEmpty()) {
+                        artist = texts[0]
+                    }
+                    if (texts.size > 1) {
+                        val second = texts[1]
+                        if (second.matches(Regex("^\\d+:\\d+$"))) {
+                            durationMs = parseDurationMs(second)
+                        } else {
+                            album = second
+                        }
+                    }
+                    if (texts.size > 2) {
+                        val third = texts[2]
+                        if (third.matches(Regex("^\\d+:\\d+$"))) {
+                            durationMs = parseDurationMs(third)
+                        }
+                    }
+                }
+            }
+
+            var thumbUrl: String? = null
+            val thumbs = item.getAsJsonObject("thumbnail")
+                ?.getAsJsonObject("musicThumbnailRenderer")
+                ?.getAsJsonObject("thumbnail")
+                ?.getAsJsonArray("thumbnails")
+            if (thumbs != null && thumbs.size() > 0) {
+                thumbUrl = thumbs.get(thumbs.size() - 1).asJsonObject.get("url")?.asString
+            }
+            val highResThumb = upgradeArtworkUrl(thumbUrl, videoId)
+            val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(title, artist)
+
+            return YouTubeTrack(
+                videoId = videoId,
+                title = cleanedTitle,
+                artist = cleanedArtist,
+                album = album,
+                durationMs = durationMs,
+                thumbnailUrl = highResThumb
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    private fun parseMusicCardShelf(card: JsonObject): YouTubeTrack? {
+        try {
+            val title = card.getAsJsonObject("title")?.getAsJsonArray("runs")?.get(0)?.asJsonObject?.get("text")?.asString ?: return null
+            val cardJsonStr = card.toString()
+            val vidPattern = Pattern.compile(""""videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"""")
+            val vidMatcher = vidPattern.matcher(cardJsonStr)
+            val videoId = if (vidMatcher.find()) vidMatcher.group(1) else {
+                val m2 = VIDEO_REGEX.matcher(cardJsonStr)
+                if (m2.find()) m2.group(1) else return null
+            }
+
+            var artist = "YouTube Music"
+            val subRuns = card.getAsJsonObject("subtitle")?.getAsJsonArray("runs")
+            if (subRuns != null) {
+                for (k in 0 until subRuns.size()) {
+                    val txt = subRuns.get(k).asJsonObject.get("text")?.asString.orEmpty().trim()
+                    if (txt.isNotEmpty() && txt != "•" && !isCategoryBadge(txt)) {
+                        artist = txt
+                        break
+                    }
+                }
+            }
+
+            var thumbUrl: String? = null
+            val thumb = card.getAsJsonObject("thumbnail")?.getAsJsonObject("musicThumbnailRenderer")
+                ?.getAsJsonObject("thumbnail")?.getAsJsonArray("thumbnails")
+            if (thumb != null && thumb.size() > 0) {
+                thumbUrl = thumb.get(thumb.size() - 1).asJsonObject.get("url")?.asString
+            }
+            val highResThumb = upgradeArtworkUrl(thumbUrl, videoId)
+            val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(title, artist)
+
+            return YouTubeTrack(
+                videoId = videoId,
+                title = cleanedTitle,
+                artist = cleanedArtist,
+                album = "YouTube Music",
+                durationMs = 210_000L,
+                thumbnailUrl = highResThumb
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    private fun isCategoryBadge(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower in setOf("song", "video", "песня", "видео", "artist", "артист", "album", "альбом", "single", "сингл")
+    }
+
+    private fun parseDurationMs(durationStr: String): Long {
+        return try {
+            val parts = durationStr.split(":")
+            if (parts.size == 2) {
+                (parts[0].toLong() * 60 + parts[1].toLong()) * 1000L
+            } else if (parts.size == 3) {
+                (parts[0].toLong() * 3600 + parts[1].toLong() * 60 + parts[2].toLong()) * 1000L
+            } else {
+                180_000L
+            }
+        } catch (e: Exception) {
+            180_000L
+        }
+    }
+
+    /**
+     * Parses a single YouTube track metadata by video ID.
+     */
+    suspend fun parseSong(videoId: String, region: String = "US"): YouTubeTrack? = withContext(Dispatchers.IO) {
+        val payload = JsonObject().apply {
+            add("context", createWebRemixContext(region))
+            addProperty("query", videoId)
+        }
+
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/search?prettyPrint=false")
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", "application/json")
+                .header("Referer", "https://music.youtube.com/")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext null
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            val tabs = json.getAsJsonObject("contents")
+                ?.getAsJsonObject("tabbedSearchResultsRenderer")
+                ?.getAsJsonArray("tabs") ?: return@withContext null
+
+            if (tabs.size() == 0) return@withContext null
+            val secList = tabs.get(0).asJsonObject
+                .getAsJsonObject("tabRenderer")
+                ?.getAsJsonObject("content")
+                ?.getAsJsonObject("sectionListRenderer")
+                ?.getAsJsonArray("contents") ?: return@withContext null
+
+            for (i in 0 until secList.size()) {
+                val sec = secList.get(i).asJsonObject
+                sec.getAsJsonObject("musicCardShelfRenderer")?.let { card ->
+                    parseMusicCardShelf(card)?.let { return@withContext it }
+                }
+                sec.getAsJsonObject("musicShelfRenderer")?.getAsJsonArray("contents")?.let { items ->
+                    for (j in 0 until items.size()) {
+                        items.get(j).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer")?.let { item ->
+                            val track = parseResponsiveListItem(item)
+                            if (track != null && track.videoId == videoId) {
+                                return@withContext track
+                            }
+                        }
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Timber.e(e, "Error in InnerTube parseSong for $videoId")
+            null
+        }
+    }
+
+    /**
+     * Extracts an unthrottled direct audio stream URL for ExoPlayer playback.
+     * Uses Android InnerTube client with caching (4 hour TTL).
+     */
+    suspend fun getAudioStreamUrl(videoId: String): String? = withContext(Dispatchers.IO) {
+        val trimmedId = extractVideoId(videoId) ?: videoId.trim()
+        if (trimmedId.length != 11) return@withContext null
+
+        // Check in-memory cache
+        val now = System.currentTimeMillis()
+        streamUrlCache[trimmedId]?.let { (cachedUrl, timestamp) ->
+            if (now - timestamp < STREAM_CACHE_TTL_MS) {
+                Timber.d("InnerTube stream cache hit for $trimmedId")
+                return@withContext cachedUrl
+            } else {
+                streamUrlCache.remove(trimmedId)
+            }
+        }
+
+        // Tier 1: Android Client v21.26.364
+        val stream1 = queryPlayerEndpoint(
+            videoId = trimmedId,
+            clientVersion = "21.26.364",
+            clientNameNumber = "3"
+        )
+        if (!stream1.isNullOrBlank()) {
+            streamUrlCache[trimmedId] = Pair(stream1, now)
+            return@withContext stream1
+        }
+
+        // Tier 2: Android Client v20.10.38 (fallback)
+        val stream2 = queryPlayerEndpoint(
+            videoId = trimmedId,
+            clientVersion = "20.10.38",
+            clientNameNumber = "3"
+        )
+        if (!stream2.isNullOrBlank()) {
+            streamUrlCache[trimmedId] = Pair(stream2, now)
+            return@withContext stream2
+        }
+
+        Timber.w("InnerTube could not extract playable stream URL for $trimmedId")
+        null
+    }
+
+    private fun queryPlayerEndpoint(videoId: String, clientVersion: String, clientNameNumber: String): String? {
+        val clientObj = JsonObject().apply {
+            addProperty("clientName", "ANDROID")
+            addProperty("clientVersion", clientVersion)
+            addProperty("androidSdkVersion", 30)
+            addProperty("userAgent", "com.google.android.youtube/$clientVersion (Linux; U; Android 11) gzip")
+            addProperty("osName", "Android")
+            addProperty("osVersion", "11")
+            addProperty("hl", "en")
+            addProperty("gl", "US")
+        }
+        val contextObj = JsonObject().apply {
+            add("client", clientObj)
+        }
+        val payload = JsonObject().apply {
+            add("context", contextObj)
+            addProperty("videoId", videoId)
+        }
+
+        val ua = "com.google.android.youtube/$clientVersion (Linux; U; Android 11) gzip"
+
+        try {
+            val request = Request.Builder()
+                .url(PLAYER_URL)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", ua)
+                .header("X-YouTube-Client-Name", clientNameNumber)
+                .header("X-YouTube-Client-Version", clientVersion)
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Timber.w("Player API HTTP ${response.code} for $videoId with client $clientVersion")
+                return null
+            }
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+
+            val status = json.getAsJsonObject("playabilityStatus")?.get("status")?.asString
+            if (status != "OK") {
+                Timber.w("Player API returned status: $status for $videoId")
+                return null
+            }
+
+            val streamingData = json.getAsJsonObject("streamingData") ?: return null
+
+            // 1. Check formats (typically itag 18 MP4 with audio/video stream)
+            val formats = streamingData.getAsJsonArray("formats")
+            if (formats != null && formats.size() > 0) {
+                for (i in 0 until formats.size()) {
+                    val f = formats.get(i).asJsonObject
+                    val url = f.get("url")?.asString
+                    if (!url.isNullOrBlank()) {
+                        Timber.d("Found direct stream URL (formats itag ${f.get("itag")?.asInt}) for $videoId")
+                        return url
+                    }
+                }
+            }
+
+            // 2. Check adaptiveFormats (pure audio streams)
+            val adaptiveFormats = streamingData.getAsJsonArray("adaptiveFormats")
+            if (adaptiveFormats != null && adaptiveFormats.size() > 0) {
+                for (i in 0 until adaptiveFormats.size()) {
+                    val f = adaptiveFormats.get(i).asJsonObject
+                    val mime = f.get("mimeType")?.asString.orEmpty()
+                    if (mime.startsWith("audio/")) {
+                        val url = f.get("url")?.asString
+                        if (!url.isNullOrBlank()) {
+                            Timber.d("Found direct audio stream URL (adaptiveFormats itag ${f.get("itag")?.asInt}) for $videoId")
+                            return url
+                        }
+                    }
+                }
+            }
+
+            return null
+        } catch (e: Exception) {
+            Timber.e(e, "Exception querying player endpoint for $videoId")
+            return null
+        }
+    }
+
+    /**
+     * Resolves a YouTubeTrack into a fully playable Song model with direct stream URL.
+     */
+    suspend fun resolvePlayableSong(track: YouTubeTrack): Song? = withContext(Dispatchers.IO) {
+        var streamUrl = getAudioStreamUrl(track.videoId)
+        var usedVideoId = track.videoId
+        var resolvedThumb = track.thumbnailUrl
+
+        // If direct stream fails (e.g. region-restricted or deleted video), fallback to searching alternatives
+        if (streamUrl.isNullOrBlank()) {
+            Timber.w("Direct stream failed for ${track.videoId}, searching alternative for: ${track.artist} - ${track.title}")
+            val alts = searchSongs("${track.artist} ${track.title}")
+            for (alt in alts) {
+                if (alt.videoId != track.videoId) {
+                    val altUrl = getAudioStreamUrl(alt.videoId)
+                    if (!altUrl.isNullOrBlank()) {
+                        Timber.d("Found alternative playable stream: ${alt.videoId} for ${track.title}")
+                        streamUrl = altUrl
+                        usedVideoId = alt.videoId
+                        if (resolvedThumb.isNullOrBlank()) resolvedThumb = alt.thumbnailUrl
+                        break
+                    }
+                }
+            }
+        }
+
+        if (streamUrl.isNullOrBlank()) return@withContext null
+
+        val songId = "yt_$usedVideoId"
+        val (cleanTitle, cleanArtist) = cleanTitleAndArtist(track.title, track.artist)
+        val highResThumb = upgradeArtworkUrl(resolvedThumb, usedVideoId)
+
+        Song(
+            id = songId,
+            title = cleanTitle,
+            artist = cleanArtist,
+            artistId = cleanArtist.hashCode().toLong(),
+            artists = listOf(ArtistRef(id = cleanArtist.hashCode().toLong(), name = cleanArtist, isPrimary = true)),
+            album = track.album ?: "YouTube Music",
+            albumId = (track.album ?: "YouTube Music").hashCode().toLong(),
+            path = streamUrl,
+            contentUriString = streamUrl,
+            albumArtUriString = highResThumb,
+            duration = track.durationMs,
+            genre = "YouTube Music",
+            mimeType = "video/mp4",
+            bitrate = 160000,
+            sampleRate = 48000
+        )
+    }
+
+    /**
+     * Resolves any YouTube URL into a playable Song model with high quality artwork.
+     */
+    suspend fun resolvePlayableSongFromUrl(
+        url: String,
+        defaultTitle: String,
+        defaultArtist: String,
+        thumb: String? = null
+    ): Song? = withContext(Dispatchers.IO) {
+        val videoId = extractVideoId(url) ?: return@withContext null
+        val meta = parseSong(videoId)
+
+        val resolvedTitle = meta?.title ?: defaultTitle.ifBlank { "YouTube Track" }
+        val resolvedArtist = meta?.artist ?: defaultArtist.ifBlank { "YouTube Music" }
+        val resolvedThumb = meta?.thumbnailUrl ?: thumb
+        val duration = meta?.durationMs ?: 210_000L
+
+        val (cleanTitle, cleanArtist) = cleanTitleAndArtist(resolvedTitle, resolvedArtist)
+        val highResThumb = upgradeArtworkUrl(resolvedThumb, videoId)
+
+        val dummyTrack = YouTubeTrack(
+            videoId = videoId,
+            title = cleanTitle,
+            artist = cleanArtist,
+            album = meta?.album ?: "YouTube Music",
+            durationMs = duration,
+            thumbnailUrl = highResThumb
+        )
+        resolvePlayableSong(dummyTrack)
+    }
+
+    /**
+     * Converts a YouTubeTrack into an app Song model for UI representations with upgraded artwork.
+     */
+    fun toSong(track: YouTubeTrack): Song {
+        val dummyId = "yt_${track.videoId}"
+        val (cleanTitle, cleanArtist) = cleanTitleAndArtist(track.title, track.artist)
+        val highResThumb = upgradeArtworkUrl(track.thumbnailUrl, track.videoId)
+
+        return Song(
+            id = dummyId,
+            title = cleanTitle,
+            artist = cleanArtist,
+            artistId = cleanArtist.hashCode().toLong(),
+            artists = listOf(ArtistRef(id = cleanArtist.hashCode().toLong(), name = cleanArtist, isPrimary = true)),
+            album = track.album ?: "YouTube Music",
+            albumId = (track.album ?: "YouTube Music").hashCode().toLong(),
+            path = "https://music.youtube.com/watch?v=${track.videoId}",
+            contentUriString = "https://music.youtube.com/watch?v=${track.videoId}",
+            albumArtUriString = highResThumb,
+            duration = track.durationMs,
+            genre = "YouTube Music",
+            mimeType = "video/mp4",
+            bitrate = 160000,
+            sampleRate = 48000
+        )
+    }
+
+    private fun createWebRemixContext(region: String = "US"): JsonObject {
+        val client = JsonObject().apply {
+            addProperty("clientName", "WEB_REMIX")
+            addProperty("clientVersion", "1.20240101.01.00")
+            addProperty("hl", "ru")
+            addProperty("gl", region)
+        }
+        return JsonObject().apply {
+            add("client", client)
+        }
+    }
+}
