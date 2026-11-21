@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -94,6 +95,13 @@ fun TvMainScreen(
     var showQrDialog by remember { mutableStateOf(false) }
     val stableState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val currentSong = stableState.currentSong
+
+    val receivedTransferItem by tvQrTransferManager.receivedItem.collectAsStateWithLifecycle()
+    LaunchedEffect(receivedTransferItem) {
+        if (receivedTransferItem != null) {
+            showQrDialog = true
+        }
+    }
 
     // Fullscreen Welcome / Onboarding Screen if active
     if (showWelcomeScreen) {

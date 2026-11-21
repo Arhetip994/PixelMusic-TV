@@ -86,7 +86,8 @@ object AudioMatchingHelper {
 
         if (targetDurationSec > 0 && candDurationSec > 0) {
             val diff = kotlin.math.abs(targetDurationSec - candDurationSec)
-            if (diff > 45.0) return false
+            val maxDiff = if (normTargetT == normCandT) 80.0 else 45.0
+            if (diff > maxDiff) return false
         }
 
         val normTargetA = normalize(targetArtist)

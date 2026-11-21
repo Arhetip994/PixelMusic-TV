@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import com.unshoo.pixelmusic.data.model.ArtistRef
 import com.unshoo.pixelmusic.data.model.Song
 import com.unshoo.pixelmusic.data.network.artwork.StudioArtworkResolver
+import com.unshoo.pixelmusic.data.network.audio.AudioMatchingHelper
 import com.unshoo.pixelmusic.data.network.audio.MultiSourceAudioEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -209,10 +210,11 @@ class InnerTubeParser @Inject constructor(
         targetDurationMs: Long,
         excludeVideoId: String? = null
     ): Pair<String, String>? = withContext(Dispatchers.IO) {
-        val primaryArtist = targetArtist.split(",").firstOrNull()?.trim() ?: targetArtist
+        val primaryArtist = targetArtist.split(",", "&", "/").firstOrNull()?.trim() ?: targetArtist
         val altQueries = listOf(
             "$primaryArtist $targetTitle lyrics",
             "$primaryArtist $targetTitle official lyric video",
+            "$primaryArtist $targetTitle official audio",
             "$targetArtist $targetTitle lyrics",
             "$targetTitle $primaryArtist"
         )
@@ -222,38 +224,64 @@ class InnerTubeParser @Inject constructor(
             seen.add(excludeVideoId)
         }
 
+        val allCandidates = mutableListOf<YouTubeTrack>()
         for (aq in altQueries) {
-            val candidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, "US")
-            for (cand in candidates) {
-                if (!seen.add(cand.videoId)) continue
-
-                val tLower = cand.title.lowercase()
-                val targetLower = targetTitle.lowercase().trim()
-
-                // 1. Must contain the real song title
-                if (!tLower.contains(targetLower)) continue
-
-                // 2. Reject fake songs, remixes, covers, instrumentals, piano tutorials, "after dark", etc.
-                if (CLICKBAIT_NOISE_REGEX.containsMatchIn(tLower)) {
-                    Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to clickbait/remix keyword")
-                    continue
+            val list = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, "US")
+            for (c in list) {
+                if (seen.add(c.videoId)) {
+                    allCandidates.add(c)
                 }
+            }
+        }
 
-                // 3. Duration validation: if target duration is known, require ±45 seconds match
-                if (targetDurationMs > 60_000L && cand.durationMs > 0L) {
-                    val diffMs = kotlin.math.abs(cand.durationMs - targetDurationMs)
-                    if (diffMs > 45_000L) {
-                        Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to duration diff: ${diffMs / 1000}s")
-                        continue
-                    }
-                }
+        val targetLower = targetTitle.lowercase().trim()
+        val primaryArtistNorm = AudioMatchingHelper.normalize(primaryArtist)
 
-                // 4. Check if stream is actually unthrottled and playable
-                val streamUrl = getAudioStreamUrl(cand.videoId)
-                if (!streamUrl.isNullOrBlank()) {
-                    Timber.i("Selected verified playable alternative for '$targetTitle': ${cand.videoId} ('${cand.title}')")
-                    return@withContext Pair(cand.videoId, streamUrl)
+        val validCandidates = allCandidates.filter { cand ->
+            val tLower = cand.title.lowercase()
+            // 1. Must contain the real song title
+            if (!tLower.contains(targetLower)) return@filter false
+
+            // 2. Reject fake songs, remixes, covers, instrumentals, piano tutorials, "after dark", etc.
+            if (CLICKBAIT_NOISE_REGEX.containsMatchIn(tLower)) {
+                Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to clickbait/remix keyword")
+                return@filter false
+            }
+
+            // 3. Artist authenticity: either candidate artist or video title must mention primary artist
+            if (primaryArtistNorm.isNotBlank()) {
+                val candArtistNorm = AudioMatchingHelper.normalize(cand.artist)
+                val candTitleNorm = AudioMatchingHelper.normalize(cand.title)
+                val matchesArtist = candArtistNorm.contains(primaryArtistNorm) || candTitleNorm.contains(primaryArtistNorm)
+                if (!matchesArtist) {
+                    Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}' by '${cand.artist}'): artist does not match '$primaryArtist'")
+                    return@filter false
                 }
+            }
+
+            // 4. Duration validation: if target duration is known, require candidate within ±35 seconds
+            if (targetDurationMs > 60_000L && cand.durationMs > 0L) {
+                val diffMs = kotlin.math.abs(cand.durationMs - targetDurationMs)
+                if (diffMs > 35_000L) {
+                    Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to duration diff: ${diffMs / 1000}s")
+                    return@filter false
+                }
+            }
+            true
+        }.sortedBy { cand ->
+            // Prioritize closest duration match
+            if (targetDurationMs > 0L && cand.durationMs > 0L) {
+                kotlin.math.abs(cand.durationMs - targetDurationMs)
+            } else {
+                0L
+            }
+        }
+
+        for (cand in validCandidates) {
+            val streamUrl = getAudioStreamUrl(cand.videoId)
+            if (!streamUrl.isNullOrBlank()) {
+                Timber.i("Selected verified playable alternative for '$targetTitle': ${cand.videoId} ('${cand.title}', duration: ${cand.durationMs / 1000}s, diff: ${kotlin.math.abs(cand.durationMs - targetDurationMs) / 1000}s)")
+                return@withContext Pair(cand.videoId, streamUrl)
             }
         }
         null
@@ -297,12 +325,13 @@ class InnerTubeParser @Inject constructor(
             }
             val finalArt = if (studioArt.isNotBlank()) studioArt else highResThumb
 
+            val cachedDur = videoDurationCache[trimmedId] ?: 0L
             YouTubeTrack(
                 videoId = trimmedId,
                 title = cleanedTitle,
                 artist = cleanedArtist,
                 album = "YouTube Music",
-                durationMs = 210_000L,
+                durationMs = cachedDur,
                 thumbnailUrl = finalArt
             )
         } catch (e: Exception) {
@@ -925,12 +954,13 @@ class InnerTubeParser @Inject constructor(
             val highResThumb = upgradeArtworkUrl(thumbUrl, videoId)
             val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(title, artist)
 
+            val cachedDur = videoDurationCache[videoId] ?: 0L
             return YouTubeTrack(
                 videoId = videoId,
                 title = cleanedTitle,
                 artist = cleanedArtist,
                 album = "YouTube Music",
-                durationMs = 210_000L,
+                durationMs = cachedDur,
                 thumbnailUrl = highResThumb
             )
         } catch (e: Exception) {
@@ -967,16 +997,16 @@ class InnerTubeParser @Inject constructor(
         val trimmedId = extractVideoId(videoId) ?: videoId.trim()
         if (trimmedId.length != 11) return@withContext null
 
-        // 1. Try oEmbed first (lightning fast, immune to geo-restrictions)
-        val oEmbedMeta = fetchOEmbedMetadata(trimmedId)
-        if (oEmbedMeta != null && oEmbedMeta.title.isNotBlank()) {
-            return@withContext oEmbedMeta
-        }
-
-        // 2. Try player videoDetails (exact metadata even for restricted videos)
+        // 1. Try player videoDetails first (extracts exact duration, title, and author even for restricted videos)
         val playerMeta = fetchPlayerVideoDetails(trimmedId)
         if (playerMeta != null && playerMeta.title.isNotBlank()) {
             return@withContext playerMeta
+        }
+
+        // 2. Try oEmbed as secondary fallback (lightning fast, immune to geo-restrictions)
+        val oEmbedMeta = fetchOEmbedMetadata(trimmedId)
+        if (oEmbedMeta != null && oEmbedMeta.title.isNotBlank()) {
+            return@withContext oEmbedMeta
         }
 
         // 3. Fallback to InnerTube search
@@ -1205,7 +1235,13 @@ class InnerTubeParser @Inject constructor(
      * falling back to unthrottled YouTube InnerTube streams with verified clickbait/region filtering.
      */
     suspend fun resolvePlayableSong(track: YouTubeTrack): Song? = withContext(Dispatchers.IO) {
-        val targetDur = videoDurationCache[track.videoId] ?: track.durationMs
+        var targetDur = videoDurationCache[track.videoId] ?: track.durationMs
+        if (targetDur <= 0L) {
+            val playerMeta = fetchPlayerVideoDetails(track.videoId)
+            if (playerMeta != null && playerMeta.durationMs > 0L) {
+                targetDur = playerMeta.durationMs
+            }
+        }
         val (cleanTitle, cleanArtist) = cleanTitleAndArtist(track.title, track.artist)
         val highResThumb = upgradeArtworkUrl(track.thumbnailUrl, track.videoId)
 
@@ -1313,7 +1349,7 @@ class InnerTubeParser @Inject constructor(
         val resolvedTitle = meta?.title ?: defaultTitle.ifBlank { "YouTube Track" }
         val resolvedArtist = meta?.artist ?: defaultArtist.ifBlank { "YouTube Music" }
         val resolvedThumb = meta?.thumbnailUrl ?: thumb
-        val duration = meta?.durationMs ?: 210_000L
+        val duration = meta?.durationMs?.takeIf { it > 0L } ?: (videoDurationCache[videoId] ?: 0L)
 
         val (cleanTitle, cleanArtist) = cleanTitleAndArtist(resolvedTitle, resolvedArtist)
         val highResThumb = upgradeArtworkUrl(resolvedThumb, videoId)
