@@ -181,10 +181,79 @@ class InnerTubeParser @Inject constructor(
         .build()
 
     private val streamUrlCache = ConcurrentHashMap<String, Pair<String, Long>>()
+    private val videoDurationCache = ConcurrentHashMap<String, Long>()
+
+    private val CLICKBAIT_NOISE_REGEX = Regex(
+        """\b(remix|cover|karaoke|instrumental|tutorial|piano|after\s*dark|slowed|sped\s*up|reverb|8d|mashup|flp|tribute|parody)\b""",
+        RegexOption.IGNORE_CASE
+    )
 
     fun extractPlaylistId(input: String): String? = extractPlaylistIdStatic(input)
 
     fun extractVideoId(input: String): String? = extractVideoIdStatic(input)
+
+    /**
+     * Finds a verified, unblocked playable stream for a song when the official video is geoblocked.
+     * Enforces:
+     * 1. Query prioritization (clean lyric videos first).
+     * 2. Strict clickbait/remix/cover filtering.
+     * 3. Strict duration validation (candidate must be within ±45s of target song length).
+     */
+    suspend fun findPlayableAlternative(
+        targetTitle: String,
+        targetArtist: String,
+        targetDurationMs: Long,
+        excludeVideoId: String? = null
+    ): Pair<String, String>? = withContext(Dispatchers.IO) {
+        val primaryArtist = targetArtist.split(",").firstOrNull()?.trim() ?: targetArtist
+        val altQueries = listOf(
+            "$primaryArtist $targetTitle lyrics",
+            "$primaryArtist $targetTitle official lyric video",
+            "$targetArtist $targetTitle lyrics",
+            "$targetTitle $primaryArtist"
+        )
+
+        val seen = mutableSetOf<String>()
+        if (!excludeVideoId.isNullOrBlank()) {
+            seen.add(excludeVideoId)
+        }
+
+        for (aq in altQueries) {
+            val candidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, "US")
+            for (cand in candidates) {
+                if (!seen.add(cand.videoId)) continue
+
+                val tLower = cand.title.lowercase()
+                val targetLower = targetTitle.lowercase().trim()
+
+                // 1. Must contain the real song title
+                if (!tLower.contains(targetLower)) continue
+
+                // 2. Reject fake songs, remixes, covers, instrumentals, piano tutorials, "after dark", etc.
+                if (CLICKBAIT_NOISE_REGEX.containsMatchIn(tLower)) {
+                    Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to clickbait/remix keyword")
+                    continue
+                }
+
+                // 3. Duration validation: if target duration is known, require ±45 seconds match
+                if (targetDurationMs > 60_000L && cand.durationMs > 0L) {
+                    val diffMs = kotlin.math.abs(cand.durationMs - targetDurationMs)
+                    if (diffMs > 45_000L) {
+                        Timber.d("Rejecting candidate ${cand.videoId} ('${cand.title}') due to duration diff: ${diffMs / 1000}s")
+                        continue
+                    }
+                }
+
+                // 4. Check if stream is actually unthrottled and playable
+                val streamUrl = getAudioStreamUrl(cand.videoId)
+                if (!streamUrl.isNullOrBlank()) {
+                    Timber.i("Selected verified playable alternative for '$targetTitle': ${cand.videoId} ('${cand.title}')")
+                    return@withContext Pair(cand.videoId, streamUrl)
+                }
+            }
+        }
+        null
+    }
 
     /**
      * Retrieves video metadata using YouTube's oEmbed endpoint.
@@ -344,39 +413,25 @@ class InnerTubeParser @Inject constructor(
                 }
 
                 // If direct stream is UNPLAYABLE (geoblocked like vt0i6nuqNEo, 5EpyN_6dqyk),
-                // search for unblocked playable versions of the same song!
-                Timber.w("Video $directVideoId is geoblocked. Searching playable alternative streams for '${meta.artist} - ${meta.title}'")
-                val alts = mutableListOf<YouTubeTrack>()
-                val altQueries = listOf(
-                    "${meta.artist} ${meta.title} audio",
-                    "${meta.artist} ${meta.title}",
-                    "${meta.title} ${meta.artist.substringBefore(",")}",
-                    "${meta.artist} ${meta.title} lyrics"
+                // search for verified unblocked playable version of the same song!
+                Timber.w("Video $directVideoId is geoblocked. Searching verified playable alternative stream for '${meta.artist} - ${meta.title}'")
+                val targetDur = videoDurationCache[directVideoId] ?: meta.durationMs
+                val alt = findPlayableAlternative(
+                    targetTitle = meta.title,
+                    targetArtist = meta.artist,
+                    targetDurationMs = targetDur,
+                    excludeVideoId = directVideoId
                 )
-                for (aq in altQueries) {
-                    val searchCandidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, region)
-                    for (cand in searchCandidates) {
-                        if (cand.videoId != directVideoId && alts.none { it.videoId == cand.videoId }) {
-                            val stream = getAudioStreamUrl(cand.videoId)
-                            if (!stream.isNullOrBlank()) {
-                                alts.add(
-                                    YouTubeTrack(
-                                        videoId = cand.videoId,
-                                        title = meta.title,
-                                        artist = meta.artist,
-                                        album = meta.album,
-                                        durationMs = cand.durationMs,
-                                        thumbnailUrl = meta.thumbnailUrl ?: cand.thumbnailUrl
-                                    )
-                                )
-                                if (alts.size >= 5) break
-                            }
-                        }
-                    }
-                    if (alts.isNotEmpty()) break
-                }
-                if (alts.isNotEmpty()) {
-                    return@supervisorScope alts
+                if (alt != null) {
+                    val verifiedTrack = YouTubeTrack(
+                        videoId = alt.first,
+                        title = meta.title,
+                        artist = meta.artist,
+                        album = meta.album,
+                        durationMs = meta.durationMs,
+                        thumbnailUrl = meta.thumbnailUrl
+                    )
+                    return@supervisorScope listOf(verifiedTrack)
                 }
                 return@supervisorScope listOf(meta)
             }
@@ -486,8 +541,8 @@ class InnerTubeParser @Inject constructor(
             if (popularArtists.any { aLower.contains(it) }) score += 35
 
             if (!isMetaQuery) {
-                if (tLower.contains("karaoke") || tLower.contains("piano tutorial") || tLower.contains("tutorial") || tLower.contains("instrumental") || tLower.contains("cover")) {
-                    score -= 50
+                if (CLICKBAIT_NOISE_REGEX.containsMatchIn(tLower)) {
+                    score -= 80
                 }
             }
             score
@@ -980,6 +1035,12 @@ class InnerTubeParser @Inject constructor(
             val body = response.body.string()
             val json = JsonParser.parseString(body).asJsonObject
 
+            val videoDetails = json.getAsJsonObject("videoDetails")
+            val lengthSec = videoDetails?.get("lengthSeconds")?.asLong ?: 0L
+            if (lengthSec > 0) {
+                videoDurationCache[videoId] = lengthSec * 1000L
+            }
+
             val status = json.getAsJsonObject("playabilityStatus")?.get("status")?.asString
             if (status != "OK") {
                 Timber.w("Player API returned status: $status for $videoId")
@@ -1032,30 +1093,20 @@ class InnerTubeParser @Inject constructor(
         var usedVideoId = track.videoId
         var resolvedThumb = track.thumbnailUrl
 
-        // If direct stream fails (e.g. region-restricted or deleted video), fallback to searching alternatives
+        // If direct stream fails (e.g. region-restricted or deleted video), find verified alternative
         if (streamUrl.isNullOrBlank()) {
-            Timber.w("Direct stream failed for ${track.videoId}, searching alternative for: ${track.artist} - ${track.title}")
-            val altQueries = listOf(
-                "${track.artist} ${track.title} audio",
-                "${track.artist} ${track.title} lyrics",
-                "${track.title} ${track.artist.substringBefore(",")}",
-                "${track.artist} ${track.title}"
+            Timber.w("Direct stream failed for ${track.videoId}, searching verified alternative for: ${track.artist} - ${track.title}")
+            val targetDur = videoDurationCache[track.videoId] ?: track.durationMs
+            val alt = findPlayableAlternative(
+                targetTitle = track.title,
+                targetArtist = track.artist,
+                targetDurationMs = targetDur,
+                excludeVideoId = track.videoId
             )
-            for (aq in altQueries) {
-                val candidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, "US")
-                for (alt in candidates) {
-                    if (alt.videoId != track.videoId) {
-                        val altUrl = getAudioStreamUrl(alt.videoId)
-                        if (!altUrl.isNullOrBlank()) {
-                            Timber.d("Found alternative playable stream: ${alt.videoId} for ${track.title}")
-                            streamUrl = altUrl
-                            usedVideoId = alt.videoId
-                            if (resolvedThumb.isNullOrBlank()) resolvedThumb = alt.thumbnailUrl
-                            break
-                        }
-                    }
-                }
-                if (!streamUrl.isNullOrBlank()) break
+            if (alt != null) {
+                usedVideoId = alt.first
+                streamUrl = alt.second
+                Timber.i("Playing verified alternative stream: $usedVideoId for ${track.title}")
             }
         }
 
