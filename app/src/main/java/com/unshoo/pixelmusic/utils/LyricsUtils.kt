@@ -1,4 +1,4 @@
-﻿package com.unshoo.pixelmusic.utils
+package com.unshoo.pixelmusic.utils
 
 import android.os.Build
 import androidx.compose.animation.core.LinearEasing
@@ -962,6 +962,90 @@ object LyricsUtils {
                 }
             }
         }.joinToString("\n")
+    }
+
+    /**
+     * Shifts all timestamps in the given raw LRC text by offsetMs (positive = later, negative = earlier).
+     * Handles standard line timestamps [mm:ss.xx], enhanced word tags <mm:ss.xx>, and Kugou lines [startMs,dur].
+     */
+    fun applyOffsetToLrc(rawLrc: String, offsetMs: Long, tagOffset: Boolean = true): String {
+        if (offsetMs == 0L || rawLrc.isBlank()) return rawLrc
+        val sb = StringBuilder()
+        if (tagOffset) {
+            sb.append("[intro_offset:$offsetMs]\n")
+        }
+
+        for (rawLine in rawLrc.lines()) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+            if (line.startsWith("[intro_offset:", ignoreCase = true)) continue
+
+            // 1. Check Kugou format: [startMs,dur]<...>
+            val kugouMatcher = KUGOU_LINE_REGEX.matcher(line)
+            if (kugouMatcher.matches()) {
+                val startMs = kugouMatcher.group(1)?.toLongOrNull() ?: 0L
+                val dur = kugouMatcher.group(2) ?: "0"
+                val rest = kugouMatcher.group(3) ?: ""
+                val shiftedStart = (startMs + offsetMs).coerceAtLeast(0L)
+                sb.append("[$shiftedStart,$dur]$rest\n")
+                continue
+            }
+
+            // 2. Standard LRC format: [mm:ss.xx]Text
+            val lineMatcher = LRC_LINE_REGEX.matcher(line)
+            if (lineMatcher.matches()) {
+                val minutes = lineMatcher.group(1)?.toLong() ?: 0
+                val seconds = lineMatcher.group(2)?.toLong() ?: 0
+                val fraction = lineMatcher.group(3)?.toLong() ?: 0
+                val rawBody = lineMatcher.group(4) ?: ""
+
+                val millis = if (lineMatcher.group(3)?.length == 2) fraction * 10 else fraction
+                val currentMs = minutes * 60 * 1000 + seconds * 1000 + millis
+                val shiftedMs = (currentMs + offsetMs).coerceAtLeast(0L)
+                val shiftedMin = shiftedMs / 60000
+                val shiftedSec = (shiftedMs % 60000) / 1000
+                val shiftedHundredths = (shiftedMs % 1000) / 10
+
+                // Shift any inline enhanced word timestamps <mm:ss.xx>
+                val shiftedBody = LRC_WORD_TAG_REGEX.replace(rawBody) { matchResult ->
+                    val tagStr = matchResult.value
+                    val inner = tagStr.substring(1, tagStr.length - 1)
+                    val parts = inner.split(':', '.')
+                    if (parts.size >= 3) {
+                        val wMin = parts[0].toLongOrNull() ?: 0L
+                        val wSec = parts[1].toLongOrNull() ?: 0L
+                        val wFrac = parts[2].toLongOrNull() ?: 0L
+                        val wMillis = if (parts[2].length == 2) wFrac * 10 else wFrac
+                        val wCurrentMs = wMin * 60 * 1000 + wSec * 1000 + wMillis
+                        val wShiftedMs = (wCurrentMs + offsetMs).coerceAtLeast(0L)
+                        val wSMin = wShiftedMs / 60000
+                        val wSSec = (wShiftedMs % 60000) / 1000
+                        val wSHund = (wShiftedMs % 1000) / 10
+                        String.format(Locale.ROOT, "<%02d:%02d.%02d>", wSMin, wSSec, wSHund)
+                    } else tagStr
+                }
+
+                sb.append(String.format(Locale.ROOT, "[%02d:%02d.%02d]%s\n", shiftedMin, shiftedSec, shiftedHundredths, shiftedBody))
+            } else {
+                sb.append(line).append("\n")
+            }
+        }
+        return sb.toString().trimEnd()
+    }
+
+    /**
+     * Shifts in-memory [Lyrics] line and word timestamps by offsetMs.
+     */
+    fun applyOffset(lyrics: Lyrics, offsetMs: Long): Lyrics {
+        if (offsetMs == 0L || lyrics.synced.isNullOrEmpty()) return lyrics
+        val shifted = lyrics.synced.map { line ->
+            val newTime = (line.time + offsetMs).coerceAtLeast(0L).toInt()
+            val newWords = line.words?.map { w ->
+                w.copy(time = (w.time + offsetMs).coerceAtLeast(0L).toInt())
+            }
+            line.copy(time = newTime, words = newWords)
+        }
+        return lyrics.copy(synced = shifted)
     }
 
     /**

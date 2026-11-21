@@ -103,13 +103,14 @@ fun TvNowPlayingScreen(
     val totalDuration = if (stableState.totalDuration > 0L) stableState.totalDuration else song.duration
     val progress = (currentPosition.toFloat() / totalDuration.coerceAtLeast(1L)).coerceIn(0f, 1f)
 
-    // Synced lyrics calculation with 300ms lookahead for audio buffer sync
+    // Synced lyrics calculation with 300ms lookahead for audio buffer sync + user sync offset
+    val lyricsSyncOffset by playerViewModel.currentSongLyricsSyncOffset.collectAsStateWithLifecycle()
     val syncedLines = stableState.lyrics?.synced
-    val currentLyricIndex by remember(syncedLines) {
+    val currentLyricIndex by remember(syncedLines, lyricsSyncOffset) {
         derivedStateOf {
             if (syncedLines.isNullOrEmpty()) -1
             else {
-                val pos = currentPosition + 300L
+                val pos = (currentPosition + 300L + lyricsSyncOffset).coerceAtLeast(0L)
                 val idx = syncedLines.indexOfLast { it.time <= pos }
                 if (idx >= 0) idx else 0
             }
@@ -580,6 +581,71 @@ fun TvNowPlayingScreen(
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                         )
                     }
+
+                    if (!showQueueTab && !syncedLines.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Синхр:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TvFocusableBox(
+                                onClick = { playerViewModel.setLyricsSyncOffset(song.id, lyricsSyncOffset - 500) },
+                                shape = RoundedCornerShape(6.dp)
+                            ) { isFocused ->
+                                Text(
+                                    text = "-0.5с",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .background(
+                                            if (isFocused) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            if (lyricsSyncOffset != 0) {
+                                TvFocusableBox(
+                                    onClick = { playerViewModel.setLyricsSyncOffset(song.id, 0) },
+                                    shape = RoundedCornerShape(6.dp)
+                                ) { isFocused ->
+                                    val offsetText = if (lyricsSyncOffset > 0) "+${lyricsSyncOffset / 1000f}с" else "${lyricsSyncOffset / 1000f}с"
+                                    Text(
+                                        text = "Сброс ($offsetText)",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                        color = if (isFocused) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.error,
+                                        modifier = Modifier
+                                            .background(
+                                                if (isFocused) MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                            )
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                            TvFocusableBox(
+                                onClick = { playerViewModel.setLyricsSyncOffset(song.id, lyricsSyncOffset + 500) },
+                                shape = RoundedCornerShape(6.dp)
+                            ) { isFocused ->
+                                Text(
+                                    text = "+0.5с",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .background(
+                                            if (isFocused) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -892,24 +958,88 @@ fun TvNowPlayingScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        TvFocusableBox(
-                            onClick = { onToggleFullscreenLyrics(false) },
-                            shape = RoundedCornerShape(10.dp)
-                        ) { isFocused ->
-                            Row(
-                                modifier = Modifier
-                                    .background(
-                                        if (isFocused) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                                    )
-                                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Синхр:",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TvFocusableBox(
+                                onClick = { playerViewModel.setLyricsSyncOffset(song.id, lyricsSyncOffset - 500) },
+                                shape = RoundedCornerShape(8.dp)
+                            ) { isFocused ->
                                 Text(
-                                    text = stringResource(R.string.tv_close_karaoke),
+                                    text = "-0.5с",
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier
+                                        .background(
+                                            if (isFocused) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
                                 )
+                            }
+                            if (lyricsSyncOffset != 0) {
+                                TvFocusableBox(
+                                    onClick = { playerViewModel.setLyricsSyncOffset(song.id, 0) },
+                                    shape = RoundedCornerShape(8.dp)
+                                ) { isFocused ->
+                                    val offsetText = if (lyricsSyncOffset > 0) "+${lyricsSyncOffset / 1000f}с" else "${lyricsSyncOffset / 1000f}с"
+                                    Text(
+                                        text = "Сброс ($offsetText)",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isFocused) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.error,
+                                        modifier = Modifier
+                                            .background(
+                                                if (isFocused) MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.error.copy(alpha = 0.2f)
+                                            )
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                            TvFocusableBox(
+                                onClick = { playerViewModel.setLyricsSyncOffset(song.id, lyricsSyncOffset + 500) },
+                                shape = RoundedCornerShape(8.dp)
+                            ) { isFocused ->
+                                Text(
+                                    text = "+0.5с",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier
+                                        .background(
+                                            if (isFocused) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            TvFocusableBox(
+                                onClick = { onToggleFullscreenLyrics(false) },
+                                shape = RoundedCornerShape(10.dp)
+                            ) { isFocused ->
+                                Row(
+                                    modifier = Modifier
+                                        .background(
+                                            if (isFocused) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.tv_close_karaoke),
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = if (isFocused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                         }
                     }

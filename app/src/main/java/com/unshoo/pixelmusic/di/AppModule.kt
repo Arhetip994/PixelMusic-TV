@@ -267,7 +267,8 @@ object AppModule {
         lyricsDao: LyricsDao,
         okHttpClient: OkHttpClient,
         userPreferencesRepository: UserPreferencesRepository,
-        multiSourceLyricsProviders: com.unshoo.pixelmusic.data.network.lyrics.MultiSourceLyricsProviders
+        multiSourceLyricsProviders: com.unshoo.pixelmusic.data.network.lyrics.MultiSourceLyricsProviders,
+        lyricsIntroOffsetDetector: com.unshoo.pixelmusic.data.network.lyrics.LyricsIntroOffsetDetector
     ): LyricsRepository {
         return LyricsRepositoryImpl(
             context = context,
@@ -275,7 +276,8 @@ object AppModule {
             lyricsDao = lyricsDao,
             okHttpClient = okHttpClient,
             userPreferencesRepository = userPreferencesRepository,
-            multiSourceLyricsProviders = multiSourceLyricsProviders
+            multiSourceLyricsProviders = multiSourceLyricsProviders,
+            lyricsIntroOffsetDetector = lyricsIntroOffsetDetector
         )
     }
 

@@ -123,7 +123,8 @@ data class ExternalLyricsResult(
     val provider: String,
     val lyrics: String,
     val title: String = "",
-    val artist: String = ""
+    val artist: String = "",
+    val durationSec: Double = 0.0
 )
 
 @Singleton
@@ -295,7 +296,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                             provider = "QQMusic",
                             lyrics = decoded,
                             title = songname,
-                            artist = artists.joinToString(", ")
+                            artist = artists.joinToString(", "),
+                            durationSec = interval
                         )
                     }
                 }
@@ -336,7 +338,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                             provider = "lrclib",
                             lyrics = lyrics,
                             title = obj.optString("trackName", title),
-                            artist = obj.optString("artistName", cleanArtist)
+                            artist = obj.optString("artistName", cleanArtist),
+                            durationSec = obj.optDouble("duration", 0.0)
                         )
                     }
                 }
@@ -383,7 +386,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                     provider = "lrclib",
                     lyrics = lyrics,
                     title = candName,
-                    artist = candArtist
+                    artist = candArtist,
+                    durationSec = candDuration
                 )
             }
         }
@@ -447,7 +451,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                             provider = "lrc.red",
                             lyrics = lrcText,
                             title = candTitle,
-                            artist = candArtist
+                            artist = candArtist,
+                            durationSec = candDuration
                         )
                     }
                 }
@@ -523,7 +528,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                                 provider = "NetEase",
                                 lyrics = lrcText,
                                 title = sTitle,
-                                artist = artists.joinToString(", ")
+                                artist = artists.joinToString(", "),
+                                durationSec = sDurSec
                             )
                         }
                     }
@@ -605,7 +611,8 @@ class MultiSourceLyricsProviders @Inject constructor(
                             provider = "KuGou",
                             lyrics = lrcText,
                             title = songName,
-                            artist = singerName
+                            artist = singerName,
+                            durationSec = duration
                         )
                     }
                 }

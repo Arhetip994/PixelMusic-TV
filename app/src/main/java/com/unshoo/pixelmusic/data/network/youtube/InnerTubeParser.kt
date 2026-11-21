@@ -662,6 +662,12 @@ class InnerTubeParser @Inject constructor(
             if (titleMatches > 0 && artistMatches > 0) score += 50
             if (popularArtists.any { aLower.contains(it) }) score += 35
 
+            val isOfficialAudio = songsList.any { it.videoId == track.videoId } ||
+                    webAudioList.any { it.videoId == track.videoId } ||
+                    track.title.contains("Official Audio", ignoreCase = true) ||
+                    track.artist.contains("- Topic", ignoreCase = true)
+            if (isOfficialAudio) score += 60
+
             score
         }
 

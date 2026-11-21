@@ -119,8 +119,19 @@ class LyricsRepositoryImpl @Inject constructor(
     private val lyricsDao: com.unshoo.pixelmusic.data.database.LyricsDao,
     private val okHttpClient: OkHttpClient,
     private val userPreferencesRepository: UserPreferencesRepository,
-    private val multiSourceLyricsProviders: com.unshoo.pixelmusic.data.network.lyrics.MultiSourceLyricsProviders
+    private val multiSourceLyricsProviders: com.unshoo.pixelmusic.data.network.lyrics.MultiSourceLyricsProviders = com.unshoo.pixelmusic.data.network.lyrics.MultiSourceLyricsProviders(okHttpClient),
+    private val lyricsIntroOffsetDetector: com.unshoo.pixelmusic.data.network.lyrics.LyricsIntroOffsetDetector = com.unshoo.pixelmusic.data.network.lyrics.LyricsIntroOffsetDetector(okHttpClient)
 ) : LyricsRepository {
+
+    private fun extractVideoId(songId: String): String? {
+        return when {
+            songId.startsWith("yt_") -> songId.removePrefix("yt_")
+            songId.startsWith("mono_yt_") -> songId.removePrefix("mono_yt_")
+            songId.startsWith("mono_") -> songId.removePrefix("mono_")
+            songId.length in 10..12 -> songId
+            else -> null
+        }
+    }
 
 
     companion object {
@@ -534,14 +545,23 @@ class LyricsRepositoryImpl @Inject constructor(
             if (bestMatch != null && bestMatch.hasSyncedContent) {
                 val rawLyrics = bestMatch.preferredLyricsContent()
                 if (!rawLyrics.isNullOrBlank()) {
-                    val parsedLyrics = LyricsUtils.parseLyrics(rawLyrics).copy(areFromRemote = true)
+                    val autoOffsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(
+                        audioDurationMs = song.duration,
+                        lyricsDurationMs = (bestMatch.duration * 1000).toLong(),
+                        videoId = extractVideoId(song.id)
+                    )
+                    val rawLyricsToSave = if (autoOffsetMs > 1000L) {
+                        LyricsUtils.applyOffsetToLrc(rawLyrics, autoOffsetMs)
+                    } else rawLyrics
+
+                    val parsedLyrics = LyricsUtils.parseLyrics(rawLyricsToSave).copy(areFromRemote = true)
                     if (parsedLyrics.isValid() && !parsedLyrics.synced.isNullOrEmpty()) {
-                        Timber.tag(TAG).d("LRCLIB synced lyrics found for ${song.title}")
+                        Timber.tag(TAG).d("LRCLIB synced lyrics found for ${song.title} (offset: ${autoOffsetMs}ms)")
                         try {
                             lyricsDao.insert(
                                 com.unshoo.pixelmusic.data.database.LyricsEntity(
                                     songId = song.id.toLong(),
-                                    content = rawLyrics,
+                                    content = rawLyricsToSave,
                                     isSynced = true,
                                     source = "lrclib"
                                 )
@@ -563,14 +583,23 @@ class LyricsRepositoryImpl @Inject constructor(
             )
 
             if (multiResult != null) {
-                val parsedLyrics = LyricsUtils.parseLyrics(multiResult.lyrics).copy(areFromRemote = true)
+                val autoOffsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(
+                    audioDurationMs = song.duration,
+                    lyricsDurationMs = (multiResult.durationSec * 1000).toLong(),
+                    videoId = extractVideoId(song.id)
+                )
+                val rawLyricsToSave = if (autoOffsetMs > 1000L) {
+                    LyricsUtils.applyOffsetToLrc(multiResult.lyrics, autoOffsetMs)
+                } else multiResult.lyrics
+
+                val parsedLyrics = LyricsUtils.parseLyrics(rawLyricsToSave).copy(areFromRemote = true)
                 if (parsedLyrics.isValid()) {
-                    Timber.tag(TAG).d("Found lyrics from ${multiResult.provider} for: ${song.title}")
+                    Timber.tag(TAG).d("Found lyrics from ${multiResult.provider} for: ${song.title} (offset: ${autoOffsetMs}ms)")
                     try {
                         lyricsDao.insert(
                             com.unshoo.pixelmusic.data.database.LyricsEntity(
                                 songId = song.id.toLong(),
-                                content = multiResult.lyrics,
+                                content = rawLyricsToSave,
                                 isSynced = !parsedLyrics.synced.isNullOrEmpty(),
                                 source = multiResult.provider
                             )
@@ -1097,36 +1126,53 @@ class LyricsRepositoryImpl @Inject constructor(
         cacheKey: String,
         includeMemoryCache: Boolean
     ): Pair<Lyrics, String>? = withContext(Dispatchers.IO) {
+        var foundRaw: String? = null
         song.lyrics
             ?.trim()
             ?.takeIf { it.isNotBlank() }
-            ?.let { rawLyrics ->
-                parseStoredLyrics(rawLyrics)?.let { return@withContext it to rawLyrics }
-            }
+            ?.let { foundRaw = it }
 
-        song.id.toLongOrNull()
-            ?.let { lyricsDao.getLyrics(it)?.content }
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { rawLyrics ->
-                parseStoredLyrics(rawLyrics)?.let { return@withContext it to rawLyrics }
-            }
+        if (foundRaw == null) {
+            song.id.toLongOrNull()
+                ?.let { lyricsDao.getLyrics(it)?.content }
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { foundRaw = it }
+        }
 
-        readLyricsJsonCache(song)
-            ?.takeIf { it.hasLyrics() }
-            ?.let { data ->
-                val rawLyrics = data.wordByWordLyrics ?: data.syncedLyrics ?: data.plainLyrics
-                if (!rawLyrics.isNullOrBlank()) {
-                    parseStoredLyrics(rawLyrics)?.let { return@withContext it to rawLyrics }
+        if (foundRaw == null) {
+            readLyricsJsonCache(song)
+                ?.takeIf { it.hasLyrics() }
+                ?.let { data ->
+                    val r = data.wordByWordLyrics ?: data.syncedLyrics ?: data.plainLyrics
+                    if (!r.isNullOrBlank()) foundRaw = r
                 }
-            }
+        }
 
-        if (includeMemoryCache) {
+        if (foundRaw == null && includeMemoryCache) {
             lyricsCache.get(cacheKey)?.let { cached ->
                 lyricsToRawContent(cached)?.let { rawLyrics ->
                     return@withContext cached to rawLyrics
                 }
             }
+        }
+
+        if (foundRaw != null) {
+            val raw = foundRaw
+            val videoId = extractVideoId(song.id)
+            val adjustedRaw = if (!raw.contains("[intro_offset:") && song.duration > 0 && !videoId.isNullOrBlank()) {
+                val offsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(song.duration, 0L, videoId)
+                if (offsetMs > 1000L) {
+                    val shifted = LyricsUtils.applyOffsetToLrc(raw, offsetMs, tagOffset = true)
+                    parseStoredLyrics(shifted)?.let { p ->
+                        saveLocalLyricsJson(song, p)
+                        return@withContext p to shifted
+                    }
+                }
+                raw
+            } else raw
+
+            parseStoredLyrics(adjustedRaw)?.let { return@withContext it to adjustedRaw }
         }
 
         null
@@ -1332,14 +1378,22 @@ class LyricsRepositoryImpl @Inject constructor(
                 val results = rankedMatches.mapNotNull { match ->
                     val response = match.response
                     val rawLyrics = response.preferredLyricsContent() ?: return@mapNotNull null
-                    val parsedLyrics = LyricsUtils.parseLyrics(rawLyrics).copy(areFromRemote = true)
+                    val autoOffsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(
+                        audioDurationMs = song.duration,
+                        lyricsDurationMs = (response.duration * 1000).toLong(),
+                        videoId = extractVideoId(song.id)
+                    )
+                    val rawLyricsToUse = if (autoOffsetMs > 1000L) {
+                        LyricsUtils.applyOffsetToLrc(rawLyrics, autoOffsetMs)
+                    } else rawLyrics
+                    val parsedLyrics = LyricsUtils.parseLyrics(rawLyricsToUse).copy(areFromRemote = true)
                     if (!parsedLyrics.isValid()) {
                         LogUtils.w(this@LyricsRepositoryImpl, "Parsed lyrics are empty for: ${song.title}")
                         return@mapNotNull null
                     }
                     val hasSynced = response.hasSyncedContent
-                    LogUtils.d(this@LyricsRepositoryImpl, "  Found: ${response.name} by ${response.artistName} (synced: $hasSynced)")
-                    LyricsSearchResult(response, parsedLyrics, rawLyrics)
+                    LogUtils.d(this@LyricsRepositoryImpl, "  Found: ${response.name} by ${response.artistName} (synced: $hasSynced, offset: ${autoOffsetMs}ms)")
+                    LyricsSearchResult(response, parsedLyrics, rawLyricsToUse)
                 }
 
                 if (results.isNotEmpty()) {
@@ -1349,7 +1403,15 @@ class LyricsRepositoryImpl @Inject constructor(
                 } else {
                     val external = multiSourceLyricsProviders.fetchLyricsWaterfall(cleanTitle, cleanArtist, song.duration)
                     if (external != null) {
-                        val parsed = LyricsUtils.parseLyrics(external.lyrics).copy(areFromRemote = true)
+                        val autoOffsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(
+                            audioDurationMs = song.duration,
+                            lyricsDurationMs = (external.durationSec * 1000).toLong(),
+                            videoId = extractVideoId(song.id)
+                        )
+                        val finalLrc = if (autoOffsetMs > 1000L) {
+                            LyricsUtils.applyOffsetToLrc(external.lyrics, autoOffsetMs)
+                        } else external.lyrics
+                        val parsed = LyricsUtils.parseLyrics(finalLrc).copy(areFromRemote = true)
                         if (parsed.isValid()) {
                             val dummyResponse = LrcLibResponse(
                                 id = (System.currentTimeMillis() % 1000000).toInt(),
@@ -1358,9 +1420,9 @@ class LyricsRepositoryImpl @Inject constructor(
                                 albumName = external.provider,
                                 duration = song.duration / 1000.0,
                                 plainLyrics = parsed.plain?.joinToString("\n"),
-                                syncedLyrics = if (!parsed.synced.isNullOrEmpty()) external.lyrics else null
+                                syncedLyrics = if (!parsed.synced.isNullOrEmpty()) finalLrc else null
                             )
-                            return@withContext Result.success(Pair(combinedQuery, listOf(LyricsSearchResult(dummyResponse, parsed, external.lyrics))))
+                            return@withContext Result.success(Pair(combinedQuery, listOf(LyricsSearchResult(dummyResponse, parsed, finalLrc))))
                         }
                     }
                     LogUtils.d(this@LyricsRepositoryImpl, "No matching lyrics found for: ${song.title}")
@@ -1369,7 +1431,15 @@ class LyricsRepositoryImpl @Inject constructor(
             } else {
                 val external = multiSourceLyricsProviders.fetchLyricsWaterfall(cleanTitle, cleanArtist, song.duration)
                 if (external != null) {
-                    val parsed = LyricsUtils.parseLyrics(external.lyrics).copy(areFromRemote = true)
+                    val autoOffsetMs = lyricsIntroOffsetDetector.detectIntroOffsetMs(
+                        audioDurationMs = song.duration,
+                        lyricsDurationMs = (external.durationSec * 1000).toLong(),
+                        videoId = extractVideoId(song.id)
+                    )
+                    val finalLrc = if (autoOffsetMs > 1000L) {
+                        LyricsUtils.applyOffsetToLrc(external.lyrics, autoOffsetMs)
+                    } else external.lyrics
+                    val parsed = LyricsUtils.parseLyrics(finalLrc).copy(areFromRemote = true)
                     if (parsed.isValid()) {
                         val dummyResponse = LrcLibResponse(
                             id = (System.currentTimeMillis() % 1000000).toInt(),
@@ -1378,9 +1448,9 @@ class LyricsRepositoryImpl @Inject constructor(
                             albumName = external.provider,
                             duration = song.duration / 1000.0,
                             plainLyrics = parsed.plain?.joinToString("\n"),
-                            syncedLyrics = if (!parsed.synced.isNullOrEmpty()) external.lyrics else null
+                            syncedLyrics = if (!parsed.synced.isNullOrEmpty()) finalLrc else null
                         )
-                        return@withContext Result.success(Pair(combinedQuery, listOf(LyricsSearchResult(dummyResponse, parsed, external.lyrics))))
+                        return@withContext Result.success(Pair(combinedQuery, listOf(LyricsSearchResult(dummyResponse, parsed, finalLrc))))
                     }
                 }
                 LogUtils.d(this@LyricsRepositoryImpl, "No lyrics found remotely for: ${song.title}")

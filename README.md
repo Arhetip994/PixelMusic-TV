@@ -38,12 +38,12 @@
   Native YouTube Music and YouTube catalog playback with zero ads and no `00:00` freezes, equipped with adaptive Opus/AAC fallback stream resolution.
 - 📱 **Instant QR Code Transfer (QR Sync)**:
   Forget painful typing with a remote control! Scan the QR code on your TV screen with any smartphone camera and push tracks or playlists (YouTube Music / Spotify) straight to your TV in seconds. Operates over both LAN and resilient cloud relay (works with or without VPN).
-- 🎤 **Synced Karaoke Lyrics from 5 Providers**:
-  Multi-provider time-synchronized lyrics (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) with live word-by-word active line highlighting.
+- 🎤 **Synced Karaoke Lyrics with Intelligent Intro Offset (SponsorBlock & Heuristics)**:
+  Multi-provider time-synchronized lyrics (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou). Automatically compensates for music videos with cinematic intro skits/dialogue (e.g. YouTube music videos that are 10–30s longer than the album track) using crowd-verified SponsorBlock `music_offtopic` segments and duration delta alignment, ensuring lyrics light up in exact vocal synchronization. Includes on-screen TV remote sync fine-tuning (`-0.5s` / `+0.5s` / `Reset`).
 - 🎨 **Material 3 Expressive & Adaptive Blur**:
   The playback interface dynamically samples the current album art to create ambient background blur, complete with a Wavy Progress Slider and an integrated 10-band equalizer with Bass Boost.
-- 🖼️ **Studio Master Album Covers (Apple Music & Deezer)**:
-  Say goodbye to ugly 16:9 YouTube video stills, lyrics text overlays, and black bars! The built-in `StudioArtworkResolver` automatically fetches pristine square **1400×1400px** studio album covers from Apple Music / iTunes Store and Deezer APIs for any playing track.
+- 🖼️ **Studio Master Album Covers (Apple Music, Deezer & Yandex Music)**:
+  Say goodbye to ugly 16:9 YouTube video stills, lyrics text overlays, and black bars! The built-in `StudioArtworkResolver` automatically fetches pristine square **1000×1000px to 1400×1400px** studio album covers from Apple Music / iTunes Store, Deezer, and Yandex Music for any playing track.
 - 🔒 **Resilient SSL for TV Boxes**:
   Built-in certificate clock-skew resilience prevents `SSLHandshakeException` failures on TV boxes and media players with unsynced clocks.
 
@@ -176,12 +176,12 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
   Воспроизведение без единой рекламы и зависаний на `00:00` с адаптивным переключением на нетроттленный резервный поток YouTube InnerTube (Opus/AAC 160 kbps).
 - 📱 **Мгновенная передача по QR-коду (QR Sync)**:
   Забудьте о мучительном наборе названий пультом! Наведите камеру телефона на QR-код на экране ТВ и мгновенно отправляйте ссылки на треки или плейлисты (YouTube Music / Spotify). Работает в локальной сети и через облачный релей ntfy (с VPN и без).
-- 🎤 **Караоке-тексты песен из 5 источников**:
-  Мультипровайдер синхронизированных текстов (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) с плавной анимацией текущей строки в реальном времени.
+- 🎤 **Караоке-тексты песен с компенсацией интро (SponsorBlock и эвристика)**:
+  Мультипровайдер синхронизированных текстов (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou). Автоматически вычисляет и компенсирует задержку для клипов с сюжетными интро и диалогами (клипы с YouTube, начинающиеся на 10–30 секунд позже студийной дорожки) благодаря интеграции с базой SponsorBlock (`music_offtopic`) и сверке хронометража. В плеере и режиме караоке доступны удобные кнопки точной подстройки с пульта (`-0.5с`, `+0.5с`, `Сброс`).
 - 🎨 **Material 3 Expressive & Динамический блюр**:
   Экран плеера плавно адаптируется под цветовую гамму текущей обложки с мягким размытием, волнистым ползунком прогресса (Wavy Slider) и встроенным 10-полосным эквалайзером с Bass Boost.
-- 🖼️ **Студийные обложки альбомов (Apple Music и Deezer)**:
-  Больше никаких некрасивых стоп-кадров из клипов, текстовых плашек с YouTube и черных полос 16:9! Модуль `StudioArtworkResolver` автоматически находит и подтягивает оригинальные квадратные обложки студийных релизов в ультра-качестве **1400×1400px** из каталогов Apple Music / iTunes Store и Deezer.
+- 🖼️ **Студийные обложки альбомов (Apple Music, Deezer и Яндекс Музыка)**:
+  Больше никаких некрасивых стоп-кадров из клипов, текстовых плашек с YouTube и черных полос 16:9! Модуль `StudioArtworkResolver` автоматически находит и подтягивает оригинальные квадратные обложки студийных релизов в ультра-качестве **1000×1000px — 1400×1400px** из каталогов Apple Music / iTunes Store, Deezer и Яндекс Музыки.
 - 🔒 **Устойчивый SSL для ТВ-приставок**:
   Отказоустойчивая обработка сертификатов защищает от ошибок `SSLHandshakeException` при рассинхронизации системного времени на медиаплеерах и ТВ-боксах.
 
