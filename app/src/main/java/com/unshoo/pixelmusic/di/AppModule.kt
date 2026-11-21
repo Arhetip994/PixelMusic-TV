@@ -387,9 +387,13 @@ object AppModule {
             .retryOnConnectionFailure(true)
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
-                val requestWithUserAgent = originalRequest.newBuilder()
-                    .header("User-Agent", "PixelMusic/1.0 (Android; Music Player)")
-                    .build()
+                val requestWithUserAgent = if (originalRequest.header("User-Agent") == null) {
+                    originalRequest.newBuilder()
+                        .header("User-Agent", "PixelMusic/1.0 (Android; Music Player)")
+                        .build()
+                } else {
+                    originalRequest
+                }
                 chain.proceed(requestWithUserAgent)
             }
             .addInterceptor(loggingInterceptor)

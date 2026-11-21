@@ -8,6 +8,7 @@ import com.unshoo.pixelmusic.data.model.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -15,6 +16,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -173,11 +175,62 @@ class InnerTubeParser @Inject constructor(
         }
     }
 
+    private val client: OkHttpClient = okHttpClient.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
     private val streamUrlCache = ConcurrentHashMap<String, Pair<String, Long>>()
 
     fun extractPlaylistId(input: String): String? = extractPlaylistIdStatic(input)
 
     fun extractVideoId(input: String): String? = extractVideoIdStatic(input)
+
+    /**
+     * Retrieves video metadata using YouTube's oEmbed endpoint.
+     * Works universally without API keys, cookies, or geoblocking restrictions.
+     */
+    suspend fun fetchOEmbedMetadata(videoId: String): YouTubeTrack? = withContext(Dispatchers.IO) {
+        val trimmedId = extractVideoId(videoId) ?: videoId.trim()
+        if (trimmedId.length != 11) return@withContext null
+
+        try {
+            val url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$trimmedId&format=json"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", USER_AGENT)
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Timber.w("oEmbed returned HTTP ${response.code} for $trimmedId")
+                return@withContext null
+            }
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+            val rawTitle = json.get("title")?.asString.orEmpty()
+            val rawAuthor = json.get("author_name")?.asString.orEmpty()
+            val thumbUrl = json.get("thumbnail_url")?.asString
+
+            if (rawTitle.isBlank()) return@withContext null
+
+            val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(rawTitle, rawAuthor)
+            val highResThumb = upgradeArtworkUrl(thumbUrl, trimmedId)
+
+            YouTubeTrack(
+                videoId = trimmedId,
+                title = cleanedTitle,
+                artist = cleanedArtist,
+                album = "YouTube Music",
+                durationMs = 210_000L,
+                thumbnailUrl = highResThumb
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Error fetching oEmbed metadata for $trimmedId")
+            null
+        }
+    }
 
     /**
      * Parses a YouTube Music playlist by URL or ID.
@@ -200,7 +253,7 @@ class InnerTubeParser @Inject constructor(
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 Timber.w("InnerTube parsePlaylist failed with HTTP ${response.code}")
                 return@withContext null
@@ -274,35 +327,115 @@ class InnerTubeParser @Inject constructor(
      * Searches YouTube Music and YouTube Web concurrently.
      * Integrates Songs, Videos, and general Web searches to guarantee finding
      * hit singles, collaborations, and misspellings (e.g. The Weekend - Timless).
+     * If query is a YouTube link or video ID, resolves metadata and playable streams.
      */
-    suspend fun searchSongs(query: String, region: String = "US"): List<YouTubeTrack> = coroutineScope {
+    suspend fun searchSongs(query: String, region: String = "US"): List<YouTubeTrack> = supervisorScope {
         val trimmedQuery = query.trim()
-        if (trimmedQuery.isBlank()) return@coroutineScope emptyList()
+        if (trimmedQuery.isBlank()) return@supervisorScope emptyList()
+
+        // 1. Direct URL or Video ID query
+        val directVideoId = extractVideoId(trimmedQuery)
+        if (!directVideoId.isNullOrBlank()) {
+            val meta = parseSong(directVideoId, region)
+            if (meta != null) {
+                val directStream = getAudioStreamUrl(directVideoId)
+                if (!directStream.isNullOrBlank()) {
+                    return@supervisorScope listOf(meta)
+                }
+
+                // If direct stream is UNPLAYABLE (geoblocked like vt0i6nuqNEo, 5EpyN_6dqyk),
+                // search for unblocked playable versions of the same song!
+                Timber.w("Video $directVideoId is geoblocked. Searching playable alternative streams for '${meta.artist} - ${meta.title}'")
+                val alts = mutableListOf<YouTubeTrack>()
+                val altQueries = listOf(
+                    "${meta.artist} ${meta.title} audio",
+                    "${meta.artist} ${meta.title}",
+                    "${meta.title} ${meta.artist.substringBefore(",")}",
+                    "${meta.artist} ${meta.title} lyrics"
+                )
+                for (aq in altQueries) {
+                    val searchCandidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, region)
+                    for (cand in searchCandidates) {
+                        if (cand.videoId != directVideoId && alts.none { it.videoId == cand.videoId }) {
+                            val stream = getAudioStreamUrl(cand.videoId)
+                            if (!stream.isNullOrBlank()) {
+                                alts.add(
+                                    YouTubeTrack(
+                                        videoId = cand.videoId,
+                                        title = meta.title,
+                                        artist = meta.artist,
+                                        album = meta.album,
+                                        durationMs = cand.durationMs,
+                                        thumbnailUrl = meta.thumbnailUrl ?: cand.thumbnailUrl
+                                    )
+                                )
+                                if (alts.size >= 5) break
+                            }
+                        }
+                    }
+                    if (alts.isNotEmpty()) break
+                }
+                if (alts.isNotEmpty()) {
+                    return@supervisorScope alts
+                }
+                return@supervisorScope listOf(meta)
+            }
+        }
 
         val normalized = normalizeSearchQuery(trimmedQuery)
 
         // Parallel fan-out across multiple YouTube / YouTube Music endpoints
         val videosDeferred = async(Dispatchers.IO) {
-            executeSearchQuery(query = normalized, params = VIDEOS_FILTER_PARAMS, region = region)
+            try {
+                executeSearchQuery(query = normalized, params = VIDEOS_FILTER_PARAMS, region = region)
+            } catch (e: Exception) {
+                Timber.w(e, "Search VIDEOS endpoint failed")
+                emptyList()
+            }
         }
         val webExactDeferred = async(Dispatchers.IO) {
-            executeYouTubeWebSearch(query = normalized)
+            try {
+                executeYouTubeWebSearch(query = normalized)
+            } catch (e: Exception) {
+                Timber.w(e, "YouTube web search failed")
+                emptyList()
+            }
         }
         val webAudioDeferred = async(Dispatchers.IO) {
-            executeYouTubeWebSearch(query = "$normalized official audio")
+            try {
+                executeYouTubeWebSearch(query = "$normalized official audio")
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        val webLyricsDeferred = async(Dispatchers.IO) {
+            try {
+                executeYouTubeWebSearch(query = "$normalized lyrics")
+            } catch (e: Exception) {
+                emptyList()
+            }
         }
         val generalDeferred = async(Dispatchers.IO) {
-            executeSearchQuery(query = normalized, params = null, region = region)
+            try {
+                executeSearchQuery(query = normalized, params = null, region = region)
+            } catch (e: Exception) {
+                emptyList()
+            }
         }
         val songsDeferred = async(Dispatchers.IO) {
-            executeSearchQuery(query = normalized, params = SONGS_FILTER_PARAMS, region = region)
+            try {
+                executeSearchQuery(query = normalized, params = SONGS_FILTER_PARAMS, region = region)
+            } catch (e: Exception) {
+                emptyList()
+            }
         }
 
-        val videosList = try { videosDeferred.await() } catch (_: Exception) { emptyList() }
-        val webExactList = try { webExactDeferred.await() } catch (_: Exception) { emptyList() }
-        val webAudioList = try { webAudioDeferred.await() } catch (_: Exception) { emptyList() }
-        val generalList = try { generalDeferred.await() } catch (_: Exception) { emptyList() }
-        val songsList = try { songsDeferred.await() } catch (_: Exception) { emptyList() }
+        val videosList = videosDeferred.await()
+        val webExactList = webExactDeferred.await()
+        val webAudioList = webAudioDeferred.await()
+        val webLyricsList = webLyricsDeferred.await()
+        val generalList = generalDeferred.await()
+        val songsList = songsDeferred.await()
 
         val combined = mutableListOf<YouTubeTrack>()
         val seen = mutableSetOf<String>()
@@ -318,11 +451,18 @@ class InnerTubeParser @Inject constructor(
         addAllUnique(videosList)
         addAllUnique(webExactList)
         addAllUnique(webAudioList)
+        addAllUnique(webLyricsList)
         addAllUnique(songsList)
         addAllUnique(generalList)
 
         // Relevance ranking
         val queryWords = normalized.lowercase().split(Regex("\\s+")).filter { it.length >= 2 }
+        val popularArtists = listOf("the weeknd", "weeknd", "playboi carti", "madonna", "drake", "travis scott", "kanye", "taylor swift", "billie eilish", "eminem")
+        val isMetaQuery = normalized.lowercase().contains("karaoke") ||
+                normalized.lowercase().contains("instrumental") ||
+                normalized.lowercase().contains("tutorial") ||
+                normalized.lowercase().contains("cover")
+
         val ranked = combined.sortedByDescending { track ->
             var score = 0
             val tLower = track.title.lowercase()
@@ -332,17 +472,24 @@ class InnerTubeParser @Inject constructor(
             var artistMatches = 0
             for (w in queryWords) {
                 if (tLower.contains(w)) {
-                    score += 25
+                    score += 30
                     titleMatches++
                 }
                 if (aLower.contains(w)) {
-                    score += 20
+                    score += 25
                     artistMatches++
                 }
             }
-            if (tLower.equals(normalized, ignoreCase = true)) score += 60
-            if (tLower.startsWith(normalized, ignoreCase = true)) score += 30
-            if (titleMatches > 0 && artistMatches > 0) score += 40
+            if (tLower.equals(normalized, ignoreCase = true)) score += 100
+            if (tLower.startsWith(normalized, ignoreCase = true)) score += 40
+            if (titleMatches > 0 && artistMatches > 0) score += 50
+            if (popularArtists.any { aLower.contains(it) }) score += 35
+
+            if (!isMetaQuery) {
+                if (tLower.contains("karaoke") || tLower.contains("piano tutorial") || tLower.contains("tutorial") || tLower.contains("instrumental") || tLower.contains("cover")) {
+                    score -= 50
+                }
+            }
             score
         }
 
@@ -368,7 +515,7 @@ class InnerTubeParser @Inject constructor(
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val response = client.newCall(request).execute()
             if (!response.isSuccessful) return emptyList()
 
             val body = response.body.string()
@@ -437,14 +584,14 @@ class InnerTubeParser @Inject constructor(
      * Executes a search on regular YouTube to retrieve spell-corrected and widely popular videos.
      */
     private fun executeYouTubeWebSearch(query: String): List<YouTubeTrack> {
-        val client = JsonObject().apply {
+        val clientObj = JsonObject().apply {
             addProperty("clientName", "WEB")
             addProperty("clientVersion", "2.20240101.01.00")
             addProperty("hl", "en")
             addProperty("gl", "US")
         }
         val payload = JsonObject().apply {
-            add("context", JsonObject().apply { add("client", client) })
+            add("context", JsonObject().apply { add("client", clientObj) })
             addProperty("query", query)
         }
 
@@ -456,7 +603,7 @@ class InnerTubeParser @Inject constructor(
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val response = client.newCall(request).execute()
             if (!response.isSuccessful) return emptyList()
 
             val body = response.body.string()
@@ -681,11 +828,23 @@ class InnerTubeParser @Inject constructor(
 
     /**
      * Parses a single YouTube track metadata by video ID.
+     * Uses oEmbed as primary source for guaranteed unblocked title/artist extraction,
+     * with InnerTube as secondary fallback.
      */
     suspend fun parseSong(videoId: String, region: String = "US"): YouTubeTrack? = withContext(Dispatchers.IO) {
+        val trimmedId = extractVideoId(videoId) ?: videoId.trim()
+        if (trimmedId.length != 11) return@withContext null
+
+        // 1. Try oEmbed first (lightning fast, immune to geo-restrictions)
+        val oEmbedMeta = fetchOEmbedMetadata(trimmedId)
+        if (oEmbedMeta != null && oEmbedMeta.title.isNotBlank()) {
+            return@withContext oEmbedMeta
+        }
+
+        // 2. Fallback to InnerTube search
         val payload = JsonObject().apply {
             add("context", createWebRemixContext(region))
-            addProperty("query", videoId)
+            addProperty("query", trimmedId)
         }
 
         try {
@@ -697,7 +856,7 @@ class InnerTubeParser @Inject constructor(
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val response = client.newCall(request).execute()
             if (!response.isSuccessful) return@withContext null
             val body = response.body.string()
             val json = JsonParser.parseString(body).asJsonObject
@@ -722,7 +881,7 @@ class InnerTubeParser @Inject constructor(
                     for (j in 0 until items.size()) {
                         items.get(j).asJsonObject.getAsJsonObject("musicResponsiveListItemRenderer")?.let { item ->
                             val track = parseResponsiveListItem(item)
-                            if (track != null && track.videoId == videoId) {
+                            if (track != null && track.videoId == trimmedId) {
                                 return@withContext track
                             }
                         }
@@ -731,7 +890,7 @@ class InnerTubeParser @Inject constructor(
             }
             null
         } catch (e: Exception) {
-            Timber.e(e, "Error in InnerTube parseSong for $videoId")
+            Timber.e(e, "Error in InnerTube parseSong for $trimmedId")
             null
         }
     }
@@ -812,7 +971,7 @@ class InnerTubeParser @Inject constructor(
                 .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
                 Timber.w("Player API HTTP ${response.code} for $videoId with client $clientVersion")
                 return null
@@ -876,18 +1035,27 @@ class InnerTubeParser @Inject constructor(
         // If direct stream fails (e.g. region-restricted or deleted video), fallback to searching alternatives
         if (streamUrl.isNullOrBlank()) {
             Timber.w("Direct stream failed for ${track.videoId}, searching alternative for: ${track.artist} - ${track.title}")
-            val alts = searchSongs("${track.artist} ${track.title}")
-            for (alt in alts) {
-                if (alt.videoId != track.videoId) {
-                    val altUrl = getAudioStreamUrl(alt.videoId)
-                    if (!altUrl.isNullOrBlank()) {
-                        Timber.d("Found alternative playable stream: ${alt.videoId} for ${track.title}")
-                        streamUrl = altUrl
-                        usedVideoId = alt.videoId
-                        if (resolvedThumb.isNullOrBlank()) resolvedThumb = alt.thumbnailUrl
-                        break
+            val altQueries = listOf(
+                "${track.artist} ${track.title} audio",
+                "${track.artist} ${track.title} lyrics",
+                "${track.title} ${track.artist.substringBefore(",")}",
+                "${track.artist} ${track.title}"
+            )
+            for (aq in altQueries) {
+                val candidates = executeYouTubeWebSearch(aq) + executeSearchQuery(aq, VIDEOS_FILTER_PARAMS, "US")
+                for (alt in candidates) {
+                    if (alt.videoId != track.videoId) {
+                        val altUrl = getAudioStreamUrl(alt.videoId)
+                        if (!altUrl.isNullOrBlank()) {
+                            Timber.d("Found alternative playable stream: ${alt.videoId} for ${track.title}")
+                            streamUrl = altUrl
+                            usedVideoId = alt.videoId
+                            if (resolvedThumb.isNullOrBlank()) resolvedThumb = alt.thumbnailUrl
+                            break
+                        }
                     }
                 }
+                if (!streamUrl.isNullOrBlank()) break
             }
         }
 
@@ -975,14 +1143,14 @@ class InnerTubeParser @Inject constructor(
     }
 
     private fun createWebRemixContext(region: String = "US"): JsonObject {
-        val client = JsonObject().apply {
+        val clientObj = JsonObject().apply {
             addProperty("clientName", "WEB_REMIX")
             addProperty("clientVersion", "1.20240101.01.00")
             addProperty("hl", "ru")
             addProperty("gl", region)
         }
         return JsonObject().apply {
-            add("client", client)
+            add("client", clientObj)
         }
     }
 }
