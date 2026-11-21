@@ -127,8 +127,12 @@ class InnerTubeParser @Inject constructor(
          * Cleans junk like '(Official Video)', '(Lyrics)', etc. from YouTube titles and extracts real artist/title.
          */
         fun cleanTitleAndArtist(rawTitle: String, rawArtist: String): Pair<String, String> {
-            val noiseRegex = Regex("""\s*[\(\[](official\s*(music\s*)?video|video|lyrics?|visualizer|audio|hd|hq|4k|mv|клип|премьера)[\)\]]""", RegexOption.IGNORE_CASE)
-            var t = rawTitle.replace(noiseRegex, "").trim()
+            val noiseRegex = Regex(
+                """\s*[\(\[][^\)\]]*\b(official\s*(music\s*)?video|video|lyrics?|visualizer|audio|hd|hq|4k|mv|клип|премьера|караоке|текст\s*песни|минус(овка)?|инструментал|кавер|cover|karaoke)\b[^\)\]]*[\)\]]""",
+                RegexOption.IGNORE_CASE
+            )
+            val pipeNoiseRegex = Regex("""\s*[|/•–—]\s*(текст\s*песни|караоке|lyrics?|клип|премьера|official\s*(music\s*)?video|audio|разбор|кавер|cover).*$""", RegexOption.IGNORE_CASE)
+            var t = rawTitle.replace(noiseRegex, "").replace(pipeNoiseRegex, "").trim()
             val a = rawArtist.trim()
 
             val delims = listOf(" - ", " — ", " – ")
@@ -171,7 +175,7 @@ class InnerTubeParser @Inject constructor(
                 candArtist = candArtist.replace(Regex("""\s+\b(?:feat|ft)\.?\s+""", RegexOption.IGNORE_CASE), ", ")
                 candArtist = candArtist.replace(Regex("""\s*[\(\[](?:feat|ft)\.?\s*([^\)\]]+)[\)\]]""", RegexOption.IGNORE_CASE), ", $1")
                 candArtist = candArtist.replace('&', ',').replace("  ", " ").trim(' ', ',')
-                candTitle = candTitle.replace(noiseRegex, "").trim()
+                candTitle = candTitle.replace(noiseRegex, "").replace(pipeNoiseRegex, "").trim()
 
                 return Pair(candTitle.ifBlank { rawTitle }, candArtist.ifBlank { a.ifBlank { "YouTube Music" } })
             }
@@ -189,7 +193,8 @@ class InnerTubeParser @Inject constructor(
     private val videoDurationCache = ConcurrentHashMap<String, Long>()
 
     private val CLICKBAIT_NOISE_REGEX = Regex(
-        """\b(remix|cover|karaoke|instrumental|tutorial|piano|after\s*dark|slowed|sped\s*up|reverb|8d|mashup|flp|tribute|parody)\b""",
+        """\b(remix|cover|karaoke|instrumental|tutorial|piano|after\s*dark|slowed|sped\s*up|reverb|8d|mashup|flp|tribute|parody|amv|bass\s*boost(ed)?)\b|""" +
+        """(?:\b|(?<=[\s\(\[_]))(караоке|кавер|минус(овка)?|инструментал|текст\s*песни|разбор|пароди(я|и)|трибьют|реакци(я|и|ю)|обзор|бэкстейдж|стрим|замедлен(но|ная|ный)?|ускорен(но|ная|ный)?)(?:\b|(?=[\s\)\]_]))""",
         RegexOption.IGNORE_CASE
     )
 
@@ -212,11 +217,11 @@ class InnerTubeParser @Inject constructor(
     ): Pair<String, String>? = withContext(Dispatchers.IO) {
         val primaryArtist = targetArtist.split(",", "&", "/").firstOrNull()?.trim() ?: targetArtist
         val altQueries = listOf(
-            "$primaryArtist $targetTitle lyrics",
-            "$primaryArtist $targetTitle official lyric video",
             "$primaryArtist $targetTitle official audio",
-            "$targetArtist $targetTitle lyrics",
-            "$targetTitle $primaryArtist"
+            "$primaryArtist $targetTitle official",
+            "$primaryArtist $targetTitle topic",
+            "$targetTitle $primaryArtist",
+            "$primaryArtist $targetTitle"
         )
 
         val seen = mutableSetOf<String>()
@@ -609,22 +614,33 @@ class InnerTubeParser @Inject constructor(
             }
         }
 
-        addAllUnique(videosList)
-        addAllUnique(webExactList)
-        addAllUnique(webAudioList)
-        addAllUnique(webLyricsList)
         addAllUnique(songsList)
+        addAllUnique(webAudioList)
+        addAllUnique(webExactList)
+        addAllUnique(videosList)
         addAllUnique(generalList)
+        addAllUnique(webLyricsList)
 
         // Relevance ranking
         val queryWords = normalized.lowercase().split(Regex("\\s+")).filter { it.length >= 2 }
         val popularArtists = listOf("the weeknd", "weeknd", "playboi carti", "madonna", "drake", "travis scott", "kanye", "taylor swift", "billie eilish", "eminem")
         val isMetaQuery = normalized.lowercase().contains("karaoke") ||
+                normalized.lowercase().contains("караоке") ||
                 normalized.lowercase().contains("instrumental") ||
+                normalized.lowercase().contains("инструментал") ||
+                normalized.lowercase().contains("минус") ||
                 normalized.lowercase().contains("tutorial") ||
+                normalized.lowercase().contains("кавер") ||
                 normalized.lowercase().contains("cover")
 
-        val ranked = combined.sortedByDescending { track ->
+        val ranked = combined.filter { track ->
+            if (isMetaQuery) true
+            else {
+                val hasClickbait = CLICKBAIT_NOISE_REGEX.containsMatchIn(track.title) ||
+                        CLICKBAIT_NOISE_REGEX.containsMatchIn(track.artist)
+                !hasClickbait
+            }
+        }.sortedByDescending { track ->
             var score = 0
             val tLower = track.title.lowercase()
             val aLower = track.artist.lowercase()
@@ -646,11 +662,6 @@ class InnerTubeParser @Inject constructor(
             if (titleMatches > 0 && artistMatches > 0) score += 50
             if (popularArtists.any { aLower.contains(it) }) score += 35
 
-            if (!isMetaQuery) {
-                if (CLICKBAIT_NOISE_REGEX.containsMatchIn(tLower)) {
-                    score -= 80
-                }
-            }
             score
         }
 

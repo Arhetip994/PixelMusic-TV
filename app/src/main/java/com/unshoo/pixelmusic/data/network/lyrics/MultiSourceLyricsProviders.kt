@@ -15,19 +15,21 @@ import kotlin.math.abs
 
 object LyricsMatchingHelper {
     private val NOISE_REGEX = Regex(
-        """\s*[\(\[][^\)\]]*\b(official|video|audio|lyrics?|visuali[sz]er|remaster(ed)?|hd|hq|4k|mv|feat|ft|prod|edit|mix|version|cover|клип|премьера|remix|rmx|sped\s*up|speed\s*up|slowed|reverb|nightcore|hardstyle|phonk|bootleg|mashup|ремикс|hoodtrap|drill|trap)\b[^\)\]]*[\)\]]""",
+        """\s*[\(\[][^\)\]]*\b(official|video|audio|lyrics?|visuali[sz]er|remaster(ed)?|hd|hq|4k|mv|feat|ft|prod|edit|mix|version|cover|клип|премьера|караоке|текст\s*песни|минус(овка)?|инструментал|кавер|remix|rmx|sped\s*up|speed\s*up|slowed|reverb|nightcore|hardstyle|phonk|bootleg|mashup|ремикс|hoodtrap|drill|trap)\b[^\)\]]*[\)\]]""",
         RegexOption.IGNORE_CASE
     )
     private val REWORKED_TAIL_REGEX = Regex(
         """\s*[-–—+]?\s*\b(remix|rmx|sped\s*up|speed\s*up|slowed|reverb|nightcore|hardstyle|phonk|bootleg|mashup|ремикс|hoodtrap|drill|trap|edit)\b.*$""",
         RegexOption.IGNORE_CASE
     )
+    private val PIPE_NOISE_REGEX = Regex("""\s*[|/•–—]\s*(текст\s*песни|караоке|lyrics?|клип|премьера|audio|разбор|кавер|cover|official).*$""", RegexOption.IGNORE_CASE)
     private val BRACKETS_REGEX = Regex("""[\(\[].*?[\)\]]""")
     private val NON_ALPHANUM_REGEX = Regex("""[^a-zA-Z0-9\u0400-\u04FF]""")
 
     fun cleanNoise(str: String): String {
         return str
             .replace(NOISE_REGEX, "")
+            .replace(PIPE_NOISE_REGEX, "")
             .replace(REWORKED_TAIL_REGEX, "")
             .replace(BRACKETS_REGEX, "")
             .trim()
@@ -149,8 +151,9 @@ class MultiSourceLyricsProviders @Inject constructor(
         val cleanArtist = artist.trim()
             .replace(Regex("""\bweekend\b""", RegexOption.IGNORE_CASE), "Weeknd")
             .replace(Regex("""\bplayboy\s*carti\b""", RegexOption.IGNORE_CASE), "Playboi Carti")
-        val cleanTitle = title.trim()
+        val cleanTitle = LyricsMatchingHelper.cleanNoise(title)
             .replace(Regex("""\btimless\b""", RegexOption.IGNORE_CASE), "Timeless")
+            .ifBlank { title.trim() }
 
         // 1. Try LRCLIB General Search
         try {
@@ -309,6 +312,39 @@ class MultiSourceLyricsProviders @Inject constructor(
         val cleanArtist = if (artist.isNotBlank() && !artist.equals("YouTube Music", ignoreCase = true)) {
             artist.split(',', '&', '/', ';').firstOrNull()?.trim() ?: artist
         } else ""
+
+        // 1. Try exact get if artist is present
+        if (cleanArtist.isNotBlank()) {
+            try {
+                val encT = URLEncoder.encode(title, "UTF-8")
+                val encA = URLEncoder.encode(cleanArtist, "UTF-8")
+                val getUrl = "https://lrclib.net/api/get?track_name=$encT&artist_name=$encA"
+                val getReq = Request.Builder()
+                    .url(getUrl)
+                    .addHeader("User-Agent", "PixelMusic/1.8.11")
+                    .build()
+                val getResp = okHttpClient.newCall(getReq).execute()
+                if (getResp.isSuccessful) {
+                    val getBody = getResp.body.string()
+                    val obj = org.json.JSONObject(getBody)
+                    val synced = obj.optString("syncedLyrics", "")
+                    val plain = obj.optString("plainLyrics", "")
+                    val lyrics = if (synced.isNotBlank()) synced else plain
+                    if (lyrics.isNotBlank()) {
+                        Timber.tag(TAG).d("Found lyrics from LRCLIB exact get for $cleanArtist - $title")
+                        return@withContext ExternalLyricsResult(
+                            provider = "lrclib",
+                            lyrics = lyrics,
+                            title = obj.optString("trackName", title),
+                            artist = obj.optString("artistName", cleanArtist)
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.tag(TAG).d("LRCLIB exact get error for $title: ${e.message}")
+            }
+        }
+
         val query = if (cleanArtist.isNotBlank()) "$cleanArtist $title" else title
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "https://lrclib.net/api/search?q=$encodedQuery"
