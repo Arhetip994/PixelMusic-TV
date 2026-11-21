@@ -9,13 +9,14 @@
 ---
 
 **A premium open-source music player crafted specifically for Android TV and Google TV.**  
-*Full Material 3 Expressive design, ad-free YouTube Music streaming, instant track transfer via QR code from your smartphone, synced karaoke lyrics, and Hi-Res Lossless audio support.*
+*Full Material 3 Expressive design, Multi-Source Audio Engine with 24-bit/96kHz Lossless FLAC streaming, instant QR code transfer from smartphones, time-synced karaoke lyrics, and ultra-crisp 1200×1200px album covers.*
 
 <br>
 
 <p align="center">
   <a href="https://github.com/Arhetip994/PixelMusic-TV/releases"><img src="https://img.shields.io/github/v/release/Arhetip994/PixelMusic-TV?style=for-the-badge&color=7C4DFF&logo=android&logoColor=white" alt="Release"></a>
   <img src="https://img.shields.io/badge/Platform-Android%20TV%20%7C%20Google%20TV-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Android TV">
+  <img src="https://img.shields.io/badge/Audio-24--bit%20%2F%2096kHz%20FLAC-blueviolet?style=for-the-badge&logo=flac&logoColor=white" alt="Hi-Fi Lossless FLAC">
   <img src="https://img.shields.io/badge/Design-Material%203%20Expressive-00BCD4?style=for-the-badge" alt="Material 3 Expressive">
   <img src="https://img.shields.io/badge/License-GPL--3.0-orange?style=for-the-badge" alt="GPL-3.0">
   <img src="https://img.shields.io/badge/100%25-Ad--Free-success?style=for-the-badge" alt="100% Ad Free">
@@ -27,20 +28,24 @@
 
 ## 🌟 Key Features
 
-- 🎮 **True Android TV Leanback Experience**:
-  Built from the ground up for D-Pad remotes. Smooth focus transitions, cinematic card scaling, crisp focus rings, and instant responsiveness.
-- ⚡ **Ad-Free YouTube Music Online Streaming**:
-  Direct playback from the YouTube Music and YouTube catalog with zero ads and no `00:00` freezes, powered by smart BotGuard/PoToken handling and automatic fallback audio stream resolution.
-- 📱 **Instant QR Code Transfer**:
-  Forget slow typing with a TV remote! Point your smartphone camera at the QR code on your TV screen and send any track or playlist link (YouTube Music / Spotify) straight to the player. Works seamlessly over both LAN and ntfy cloud relay (with or without a VPN).
+- 💎 **Multi-Source Audio Engine (Studio Master Lossless FLAC)**:
+  Direct, uncompressed **24-bit / 96kHz Lossless FLAC** streaming via Monochrome Hi-Fi (`tracks.monochrome.st`, mirroring Qobuz and Tidal studio catalogs). Enjoy master sound quality for both global hits (*The Weeknd, Billie Eilish, Playboi Carti*) and Russian artists (*Miyagi & Endspiel, Basta, Skryptonite*).
+- 🛡️ **Anti-Clickbait & Smart Duration Matching (`AudioMatchingHelper`)**:
+  Strict candidate verification prevents fake AI uploads, deception "stubs", sped-up/slowed tracks, karaoke, and acoustic covers from playing. Validates duration tolerance within seconds and normalizes artist aliases (e.g. *Basta / Баста, Endspiel / Эндшпиль*).
+- 🌐 **Geo-Restriction & VEVO Immunity**:
+  Bypasses regional blocking (UMG / VEVO) by querying exact metadata directly from Google's Player API, seamlessly routing playback through Monochrome FLAC or clean verified alternatives.
+- ⚡ **Ad-Free YouTube Music Streaming**:
+  Native YouTube Music and YouTube catalog playback with zero ads and no `00:00` freezes, equipped with adaptive Opus/AAC fallback stream resolution.
+- 📱 **Instant QR Code Transfer (QR Sync)**:
+  Forget painful typing with a remote control! Scan the QR code on your TV screen with any smartphone camera and push tracks or playlists (YouTube Music / Spotify) straight to your TV in seconds. Operates over both LAN and resilient cloud relay (works with or without VPN).
 - 🎤 **Synced Karaoke Lyrics from 5 Providers**:
-  Multi-provider time-synced lyrics (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) with real-time line animations.
-- 🎨 **Material 3 Expressive & Dynamic Blur**:
-  The Now Playing screen dynamically adapts its color palette to the current album artwork with smooth background blur, a Wavy Progress Slider, and a built-in 10-band equalizer.
-- 🖼️ **Ultra HD Cover Art**:
-  Automatic upscaling of Google User Content album covers up to **1200×1200px** and YouTube thumbnails up to HD **1280×720px**.
-- 🎵 **Hi-Res Lossless Audio**:
-  Full support for modern audio formats: FLAC, ALAC, WAV, APE, OPUS, MP3, Vorbis, and AAC.
+  Multi-provider time-synchronized lyrics (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) with live word-by-word active line highlighting.
+- 🎨 **Material 3 Expressive & Adaptive Blur**:
+  The playback interface dynamically samples the current album art to create ambient background blur, complete with a Wavy Progress Slider and an integrated 10-band equalizer with Bass Boost.
+- 🖼️ **Ultra HD 1200×1200px Artwork**:
+  Automatic upscaling of Google User Content album art to pristine **1200×1200px** and YouTube video thumbnails to HD **1280×720px**.
+- 🔒 **Resilient SSL for TV Boxes**:
+  Built-in certificate clock-skew resilience prevents `SSLHandshakeException` failures on TV boxes and media players with unsynced clocks.
 
 ---
 
@@ -55,7 +60,7 @@
 ---
 
 ### 2. Now Playing Screen
-*Cinematic player featuring dynamic adaptive blur, Wavy Slider, and full D-Pad remote controls*
+*Cinematic player featuring dynamic adaptive blur, Wavy Slider, LOSSLESS FLAC badges, and full D-Pad remote controls*
 <img src="assets/tv_screenshots/02_now_playing.png" alt="PixelMusic TV Now Playing" width="90%">
 
 ---
@@ -78,12 +83,15 @@
 
 ---
 
-### 6. Settings & First-Run Onboarding
-*Choose your language (English / Russian), audio engine settings, themes, and display options*
+### 6. Multi-Source Audio Engine & TV Settings
+*Real-time audio provider status (Monochrome Lossless FLAC + YouTube InnerTube Fallback), sound profiles, and language options*
+<img src="assets/tv_screenshots/08_audio_engine.png" alt="PixelMusic TV Audio Engine Settings" width="90%">
 
-| TV Settings | Welcome Screen (Setup) |
-|:---:|:---:|
-| <img src="assets/tv_screenshots/06_settings.png" alt="TV Settings" width="100%"> | <img src="assets/tv_screenshots/07_welcome.png" alt="TV Welcome Onboarding" width="100%"> |
+---
+
+### 7. First-Run Welcome Wizard
+*Simple initial setup, storage scanner, and instant demo track loader*
+<img src="assets/tv_screenshots/07_welcome.png" alt="PixelMusic TV Welcome Onboarding" width="90%">
 
 </div>
 
@@ -96,11 +104,12 @@
 | **Name** | PixelMusic TV Edition |
 | **Repository** | [Arhetip994/PixelMusic-TV](https://github.com/Arhetip994/PixelMusic-TV) |
 | **Platform** | Android TV, Google TV, Android 11+ (API 30+) |
-| **Controls** | Remote Control (D-Pad: Up, Down, Left, Right, Center, Back) |
-| **Audio Sources** | Local Files, YouTube Music, YouTube, Web Streams |
+| **Controls** | TV Remote (D-Pad: Up, Down, Left, Right, Center, Back) |
+| **Audio Engines** | **Monochrome Hi-Fi** (24-bit/96kHz Lossless FLAC), **YouTube InnerTube** (Opus/AAC 160 kbps), Local Files |
+| **Quality Badges** | `LOSSLESS`, `FLAC`, `1411 kbps`, `MP4`, `160 kbps` |
 | **Lyrics Providers** | LRCLIB, QQ Music, Apple Music (lrc.red), NetEase, KuGou |
-| **Audio Engine** | ExoPlayer / Media3 (Float32, BassBoost, 10-band EQ) |
-| **Tech Stack** | Kotlin, Jetpack Compose for TV, Ktor, Hilt, Coroutines |
+| **DSP Engine** | ExoPlayer / Media3 (Float32, BassBoost, 10-band EQ) |
+| **Tech Stack** | Kotlin, Jetpack Compose for TV, Ktor, OkHttp, Hilt, Coroutines |
 | **License** | GNU General Public License v3.0 |
 
 ---
@@ -149,7 +158,7 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
 ---
 
 **Премиальный музыкальный плеер с открытым исходным кодом, созданный специально для Android TV и Google TV.**  
-*Полноценный Material 3 Expressive дизайн, онлайн-стриминг YouTube Music без рекламы, передача треков по QR-коду со смартфона, синхронизированные тексты песен и поддержка Hi-Res Lossless аудио.*
+*Полноценный Material 3 Expressive дизайн, аудиодвижок Multi-Source со студийным Lossless FLAC 24-бит/96 кГц, передача треков по QR-коду со смартфона, синхронизированные караоке-тексты и ультра-чёткие обложки 1200×1200px.*
 
 </div>
 
@@ -157,20 +166,24 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
 
 ## 🌟 Ключевые возможности
 
-- 🎮 **Настоящий Android TV Leanback опыт**:
-  Интерфейс спроектирован с нуля под пульты ДУ (D-Pad). Плавный фокус, кинематографические масштабирования карточек, фокусные рамки и мгновенный отклик.
+- 💎 **Аудиодвижок Multi-Source и студийный Lossless FLAC**:
+  Прямой стриминг несжатого звука студийного качества **24-бит / 96 кГц Lossless FLAC** через Monochrome Hi-Fi (`tracks.monochrome.st`, зеркалирующий базы Qobuz и Tidal). Студийное звучание как для мировых хитов (*The Weeknd, Billie Eilish, Playboi Carti*), так и для российских артистов (*Miyagi & Эндшпиль, Баста, Скриптонит*).
+- 🛡️ **Защита от подделок и умная сверка длительности (`AudioMatchingHelper`)**:
+  Интеллектуальный фильтр проверяет хронометраж трека с точностью до секунд и отсекает фейковые AI-релизы («заглушки»), замедления (slowed+reverb), ускорения (sped up), караоке и любительские каверы. Поддерживает нормализацию и транслитерацию имен исполнителей (*Баста / Basta, Эндшпиль / Endspiel*).
+- 🌐 **Устойчивость к региональным блокировкам (VEVO/UMG)**:
+  Прямое получение оригинальных метаданных через Player API позволяет воспроизводить даже треки с заблокированными на YouTube в СНГ видеоклипами (например, *The Weeknd — Popular*), направляя их в Lossless FLAC поток.
 - ⚡ **Онлайн-стриминг YouTube Music без рекламы**:
-  Прямое воспроизведение музыки из каталога YouTube Music и YouTube без единой рекламы и без зависаний на 00:00 благодаря интеллектуальному обходу BotGuard/PoToken и автопоиску альтернативных аудиопотоков.
-- 📱 **Мгновенная передача по QR-коду**:
-  Забудьте о медленном вводе названий с пульта! Наведите камеру смартфона на QR-код на экране ТВ и отправьте ссылку на трек или плейлист (YouTube Music / Spotify) прямо в плеер. Работает через локальную сеть и облачный релей ntfy (с VPN и без него).
+  Воспроизведение без единой рекламы и зависаний на `00:00` с адаптивным переключением на нетроттленный резервный поток YouTube InnerTube (Opus/AAC 160 kbps).
+- 📱 **Мгновенная передача по QR-коду (QR Sync)**:
+  Забудьте о мучительном наборе названий пультом! Наведите камеру телефона на QR-код на экране ТВ и мгновенно отправляйте ссылки на треки или плейлисты (YouTube Music / Spotify). Работает в локальной сети и через облачный релей ntfy (с VPN и без).
 - 🎤 **Караоке-тексты песен из 5 источников**:
-  Мультипровайдер синхронизированных текстов (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) с анимацией строк в реальном времени.
+  Мультипровайдер синхронизированных текстов (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) с плавной анимацией текущей строки в реальном времени.
 - 🎨 **Material 3 Expressive & Динамический блюр**:
-  Экран плеера плавно окрашивается в цвета обложки текущего трека с динамическим размытием, волнистым ползунком прогресса (Wavy Slider) и поддержкой 10-полосного эквалайзера.
-- 🖼️ **Ультра-чёткие обложки (Ultra HD)**:
-  Автоматический апскейл альбомных артов Google User Content до **1200x1200px** и YouTube-превью до HD **1280x720px**.
-- 🎵 **Hi-Res Lossless аудио**:
-  Поддержка всех современных форматов: FLAC, ALAC, WAV, APE, OPUS, MP3, Vorbis, AAC.
+  Экран плеера плавно адаптируется под цветовую гамму текущей обложки с мягким размытием, волнистым ползунком прогресса (Wavy Slider) и встроенным 10-полосным эквалайзером с Bass Boost.
+- 🖼️ **Ультра-чёткие обложки (1200×1200px)**:
+  Автоматический апскейл альбомных артов Google User Content до **1200×1200px** и YouTube-превью до HD **1280×720px**.
+- 🔒 **Устойчивый SSL для ТВ-приставок**:
+  Отказоустойчивая обработка сертификатов защищает от ошибок `SSLHandshakeException` при рассинхронизации системного времени на медиаплеерах и ТВ-боксах.
 
 ---
 
@@ -185,13 +198,13 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
 ---
 
 ### 2. Экран воспроизведения (Now Playing)
-*Кинематографический плеер с динамическим адаптивным блюром, Wavy Slider и полным управлением с пульта*
+*Кинематографический плеер с динамическим адаптивным блюром, Wavy Slider, бейджами LOSSLESS FLAC и полным управлением с пульта*
 <img src="assets/tv_screenshots/02_now_playing.png" alt="PixelMusic TV Now Playing" width="90%">
 
 ---
 
 ### 3. Синхронизированные тексты песен (Karaoke Lyrics)
-*Интерактивное отображение текста с подсветкой текущей строки в реальном времени*
+*Интерактивное отображение караоке с подсветкой текущей строки в реальном времени*
 <img src="assets/tv_screenshots/03_lyrics.png" alt="PixelMusic TV Lyrics" width="90%">
 
 ---
@@ -208,12 +221,15 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
 
 ---
 
-### 6. Настройки и Экран первого запуска (Settings & Onboarding)
-*Выбор языка (Русский / English), аудиодвижка, тем оформления и параметров экрана*
+### 6. Аудиодвижок Multi-Source и Настройки (Audio Engine & Settings)
+*Мониторинг активных провайдеров звука (Monochrome Lossless FLAC + YouTube InnerTube Fallback), звуковые профили и язык интерфейса*
+<img src="assets/tv_screenshots/08_audio_engine.png" alt="PixelMusic TV Audio Engine Settings" width="90%">
 
-| Настройки телевизора | Экран приветствия (Setup) |
-|:---:|:---:|
-| <img src="assets/tv_screenshots/06_settings.png" alt="TV Settings" width="100%"> | <img src="assets/tv_screenshots/07_welcome.png" alt="TV Welcome Onboarding" width="100%"> |
+---
+
+### 7. Экран приветствия (First-Run Onboarding)
+*Мастер первого запуска, сканер локальных накопителей и быстрая загрузка демо-треков*
+<img src="assets/tv_screenshots/07_welcome.png" alt="PixelMusic TV Welcome Onboarding" width="90%">
 
 </div>
 
@@ -227,10 +243,11 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
 | **Репозиторий** | [Arhetip994/PixelMusic-TV](https://github.com/Arhetip994/PixelMusic-TV) |
 | **Платформа** | Android TV, Google TV, Android 11+ (API 30+) |
 | **Управление** | Пульт ДУ (D-pad: Up, Down, Left, Right, Center, Back) |
-| **Источники аудио** | Локальные файлы, YouTube Music, YouTube, Web Streams |
+| **Аудиодвижки** | **Monochrome Hi-Fi** (Lossless FLAC 24-бит/96 кГц), **YouTube InnerTube** (Opus/AAC 160 kbps), Локальные файлы |
+| **Бейджи качества** | `LOSSLESS`, `FLAC`, `1411 kbps`, `MP4`, `160 kbps` |
 | **Провайдеры текстов** | LRCLIB, QQ Music, Apple Music (lrc.red), NetEase, KuGou |
-| **Аудиодвижок** | ExoPlayer / Media3 (Float32, BassBoost, 10-band EQ) |
-| **Стек** | Kotlin, Jetpack Compose for TV, Ktor, Hilt, Coroutines |
+| **DSP Эквалайзер** | ExoPlayer / Media3 (Float32, BassBoost, 10-полосный EQ) |
+| **Стек** | Kotlin, Jetpack Compose for TV, Ktor, OkHttp, Hilt, Coroutines |
 | **Лицензия** | GNU General Public License v3.0 |
 
 ---
