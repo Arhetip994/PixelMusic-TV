@@ -18,7 +18,8 @@ data class AudioStreamResult(
     val streamUrl: String,
     val mimeType: String = "audio/flac",
     val bitrate: Int = 1411000,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    val artworkUrl: String? = null
 )
 
 object AudioMatchingHelper {
@@ -187,12 +188,14 @@ class MultiSourceAudioEngine @Inject constructor(
                 ) {
                     val streamUrl = "$MONOCHROME_HOST/track/$candId"
                     val durationMs = if (candDurSec > 0) (candDurSec * 1000).toLong() else targetDurationMs
+                    val artwork = item.get("artwork")?.asString
                     val result = AudioStreamResult(
                         provider = "Monochrome Hi-Fi (FLAC)",
                         streamUrl = streamUrl,
                         mimeType = "audio/flac",
                         bitrate = 1411000,
-                        durationMs = durationMs
+                        durationMs = durationMs,
+                        artworkUrl = artwork
                     )
                     streamCache[cacheKey] = result
                     Timber.i("[$TAG] Resolved Lossless FLAC stream via Monochrome for '$title': $streamUrl")

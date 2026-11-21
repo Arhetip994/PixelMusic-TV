@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.unshoo.pixelmusic.data.model.ArtistRef
 import com.unshoo.pixelmusic.data.model.Song
+import com.unshoo.pixelmusic.data.network.artwork.StudioArtworkResolver
 import com.unshoo.pixelmusic.data.network.audio.MultiSourceAudioEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -47,7 +48,8 @@ data class YouTubePlaylist(
 class InnerTubeParser @Inject constructor(
     private val okHttpClient: OkHttpClient,
     private val gson: Gson,
-    private val multiSourceAudioEngine: MultiSourceAudioEngine
+    private val multiSourceAudioEngine: MultiSourceAudioEngine,
+    private val studioArtworkResolver: StudioArtworkResolver
 ) {
     companion object {
         private const val BASE_URL = "https://music.youtube.com/youtubei/v1"
@@ -288,6 +290,12 @@ class InnerTubeParser @Inject constructor(
 
             val (cleanedTitle, cleanedArtist) = cleanTitleAndArtist(rawTitle, rawAuthor)
             val highResThumb = upgradeArtworkUrl(thumbUrl, trimmedId)
+            val studioArt = try {
+                studioArtworkResolver.resolveStudioArtwork(cleanedTitle, cleanedArtist, fallbackUrl = highResThumb)
+            } catch (e: Exception) {
+                highResThumb.orEmpty()
+            }
+            val finalArt = if (studioArt.isNotBlank()) studioArt else highResThumb
 
             YouTubeTrack(
                 videoId = trimmedId,
@@ -295,7 +303,7 @@ class InnerTubeParser @Inject constructor(
                 artist = cleanedArtist,
                 album = "YouTube Music",
                 durationMs = 210_000L,
-                thumbnailUrl = highResThumb
+                thumbnailUrl = finalArt
             )
         } catch (e: Exception) {
             Timber.w(e, "Error fetching oEmbed metadata for $trimmedId")
@@ -350,13 +358,19 @@ class InnerTubeParser @Inject constructor(
             val (cleanT, cleanA) = cleanTitleAndArtist(rawTitle, rawAuthor)
             val thumbUrl = "https://i.ytimg.com/vi/$trimmedId/hqdefault.jpg"
             val highResThumb = upgradeArtworkUrl(thumbUrl, trimmedId)
+            val studioArt = try {
+                studioArtworkResolver.resolveStudioArtwork(cleanT, cleanA, fallbackUrl = highResThumb)
+            } catch (e: Exception) {
+                highResThumb.orEmpty()
+            }
+            val finalArt = if (studioArt.isNotBlank()) studioArt else highResThumb
 
             YouTubeTrack(
                 videoId = trimmedId,
                 title = cleanT,
                 artist = cleanA,
                 durationMs = durMs,
-                thumbnailUrl = highResThumb
+                thumbnailUrl = finalArt
             )
         } catch (e: Exception) {
             Timber.w(e, "fetchPlayerVideoDetails failed for $trimmedId")
@@ -1207,6 +1221,18 @@ class InnerTubeParser @Inject constructor(
             null
         }
 
+        // Resolve pristine square studio album artwork from Apple Music / Deezer / Monochrome
+        val studioArt = try {
+            studioArtworkResolver.resolveStudioArtwork(
+                title = cleanTitle,
+                artist = cleanArtist,
+                fallbackUrl = monoFlac?.artworkUrl ?: track.thumbnailUrl ?: highResThumb
+            )
+        } catch (e: Exception) {
+            highResThumb.orEmpty()
+        }
+        val finalArtwork = if (studioArt.isNotBlank()) studioArt else highResThumb
+
         if (monoFlac != null) {
             Timber.i("Resolved Studio Master FLAC stream via Monochrome for '$cleanTitle' by '$cleanArtist': ${monoFlac.streamUrl}")
             return@withContext Song(
@@ -1219,7 +1245,7 @@ class InnerTubeParser @Inject constructor(
                 albumId = (track.album ?: "Hi-Fi Studio Master").hashCode().toLong(),
                 path = monoFlac.streamUrl,
                 contentUriString = monoFlac.streamUrl,
-                albumArtUriString = highResThumb,
+                albumArtUriString = finalArtwork,
                 duration = if (monoFlac.durationMs > 0) monoFlac.durationMs else targetDur,
                 genre = "Monochrome Hi-Fi (FLAC)",
                 mimeType = "audio/flac",
@@ -1252,7 +1278,6 @@ class InnerTubeParser @Inject constructor(
         if (streamUrl.isNullOrBlank()) return@withContext null
 
         val songId = "yt_$usedVideoId"
-        val altHighResThumb = upgradeArtworkUrl(resolvedThumb, usedVideoId)
 
         Song(
             id = songId,
@@ -1264,7 +1289,7 @@ class InnerTubeParser @Inject constructor(
             albumId = (track.album ?: "YouTube Music").hashCode().toLong(),
             path = streamUrl,
             contentUriString = streamUrl,
-            albumArtUriString = altHighResThumb,
+            albumArtUriString = finalArtwork,
             duration = targetDur,
             genre = "YouTube Music",
             mimeType = "video/mp4",

@@ -42,8 +42,8 @@
   Multi-provider time-synchronized lyrics (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) with live word-by-word active line highlighting.
 - 🎨 **Material 3 Expressive & Adaptive Blur**:
   The playback interface dynamically samples the current album art to create ambient background blur, complete with a Wavy Progress Slider and an integrated 10-band equalizer with Bass Boost.
-- 🖼️ **Ultra HD 1200×1200px Artwork**:
-  Automatic upscaling of Google User Content album art to pristine **1200×1200px** and YouTube video thumbnails to HD **1280×720px**.
+- 🖼️ **Studio Master Album Covers (Apple Music & Deezer)**:
+  Say goodbye to ugly 16:9 YouTube video stills, lyrics text overlays, and black bars! The built-in `StudioArtworkResolver` automatically fetches pristine square **1400×1400px** studio album covers from Apple Music / iTunes Store and Deezer APIs for any playing track.
 - 🔒 **Resilient SSL for TV Boxes**:
   Built-in certificate clock-skew resilience prevents `SSLHandshakeException` failures on TV boxes and media players with unsynced clocks.
 
@@ -180,8 +180,8 @@ This project is distributed under the free **GNU General Public License v3.0 (GP
   Мультипровайдер синхронизированных текстов (LRCLIB, QQ Music, Apple Music via lrc.red, NetEase, KuGou) с плавной анимацией текущей строки в реальном времени.
 - 🎨 **Material 3 Expressive & Динамический блюр**:
   Экран плеера плавно адаптируется под цветовую гамму текущей обложки с мягким размытием, волнистым ползунком прогресса (Wavy Slider) и встроенным 10-полосным эквалайзером с Bass Boost.
-- 🖼️ **Ультра-чёткие обложки (1200×1200px)**:
-  Автоматический апскейл альбомных артов Google User Content до **1200×1200px** и YouTube-превью до HD **1280×720px**.
+- 🖼️ **Студийные обложки альбомов (Apple Music и Deezer)**:
+  Больше никаких некрасивых стоп-кадров из клипов, текстовых плашек с YouTube и черных полос 16:9! Модуль `StudioArtworkResolver` автоматически находит и подтягивает оригинальные квадратные обложки студийных релизов в ультра-качестве **1400×1400px** из каталогов Apple Music / iTunes Store и Deezer.
 - 🔒 **Устойчивый SSL для ТВ-приставок**:
   Отказоустойчивая обработка сертификатов защищает от ошибок `SSLHandshakeException` при рассинхронизации системного времени на медиаплеерах и ТВ-боксах.
 
