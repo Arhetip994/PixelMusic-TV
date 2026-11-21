@@ -189,4 +189,9 @@
     <string name="tv_playlist_import_default">Import (%d)</string>
     <string name="tv_online_stream_failed">Unable to play online track. Please try again.</string>
     <string name="tv_online_loading_stream">Loading stream…</string>
+    <string name="tv_settings_audio_engine_title">Multi-Source Audio Engine</string>
+    <string name="tv_settings_audio_monochrome_title">Monochrome Hi-Fi Lossless</string>
+    <string name="tv_settings_audio_monochrome_desc">24-bit / 96kHz Lossless FLAC stream (Active)</string>
+    <string name="tv_settings_audio_youtube_title">YouTube InnerTube Audio</string>
+    <string name="tv_settings_audio_youtube_desc">High-bitrate Opus / AAC stream (Fallback)</string>
 </resources>

@@ -227,6 +227,22 @@ fun TvNowPlayingScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val formatLabel = song.mimeType?.substringAfterLast('/')?.uppercase() ?: "AUDIO"
+                    if (formatLabel == "FLAC") {
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f),
+                                    RoundedCornerShape(6.dp)
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "LOSSLESS",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .background(

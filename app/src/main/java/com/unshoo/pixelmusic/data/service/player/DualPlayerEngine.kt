@@ -1081,9 +1081,9 @@ class DualPlayerEngine @Inject constructor(
                             return dataSpec.buildUpon().setUri(cached).build()
                         }
                         val streamUrl = try {
-                            runBlocking { innerTubeParser.getAudioStreamUrl(videoId) }
+                            runBlocking { innerTubeParser.resolveStreamUrlWithFallback(videoId) }
                         } catch (e: Exception) {
-                            Timber.tag("DualPlayerEngine").w(e, "Inline YouTube stream resolution failed for %s", videoId)
+                            Timber.tag("DualPlayerEngine").w(e, "Inline stream resolution failed for %s", videoId)
                             null
                         }
                         if (streamUrl != null) {

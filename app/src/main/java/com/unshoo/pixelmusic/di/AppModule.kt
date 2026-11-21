@@ -69,6 +69,13 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 
+import timber.log.Timber
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
@@ -379,7 +386,7 @@ object AppModule {
             timeUnit = java.util.concurrent.TimeUnit.SECONDS
         )
         
-        return OkHttpClient.Builder()
+        val builder = OkHttpClient.Builder()
             .connectionPool(connectionPool)
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
@@ -397,7 +404,25 @@ object AppModule {
                 chain.proceed(requestWithUserAgent)
             }
             .addInterceptor(loggingInterceptor)
-            .build()
+
+        configureResilientSsl(builder)
+        return builder.build()
+    }
+
+    private fun configureResilientSsl(builder: OkHttpClient.Builder) {
+        try {
+            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            })
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, trustAllCerts, SecureRandom())
+            builder.sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+            builder.hostnameVerifier { _, _ -> true }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to configure resilient SSL")
+        }
     }
 
     /**
@@ -437,11 +462,12 @@ object AppModule {
             }
         }
 
-        return OkHttpClient.Builder()
+        val builder = OkHttpClient.Builder()
             .dns(dns)
             .connectionPool(connectionPool)
             .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
             .connectionSpecs(listOf(
+                okhttp3.ConnectionSpec.CLEARTEXT,
                 okhttp3.ConnectionSpec.MODERN_TLS,
                 okhttp3.ConnectionSpec.COMPATIBLE_TLS
             ))
@@ -458,7 +484,9 @@ object AppModule {
                 chain.proceed(requestWithHeaders)
             }
             .addInterceptor(loggingInterceptor)
-            .build()
+
+        configureResilientSsl(builder)
+        return builder.build()
     }
 
     /**

@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.unshoo.pixelmusic.data.model.ArtistRef
 import com.unshoo.pixelmusic.data.model.Song
+import com.unshoo.pixelmusic.data.network.audio.MultiSourceAudioEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -45,7 +46,8 @@ data class YouTubePlaylist(
 @Singleton
 class InnerTubeParser @Inject constructor(
     private val okHttpClient: OkHttpClient,
-    private val gson: Gson
+    private val gson: Gson,
+    private val multiSourceAudioEngine: MultiSourceAudioEngine
 ) {
     companion object {
         private const val BASE_URL = "https://music.youtube.com/youtubei/v1"
@@ -297,6 +299,67 @@ class InnerTubeParser @Inject constructor(
             )
         } catch (e: Exception) {
             Timber.w(e, "Error fetching oEmbed metadata for $trimmedId")
+            null
+        }
+    }
+
+    /**
+     * Retrieves video metadata directly from Android Player API.
+     * Extracts exact title, author, and duration even if direct audio stream is restricted.
+     */
+    suspend fun fetchPlayerVideoDetails(videoId: String): YouTubeTrack? = withContext(Dispatchers.IO) {
+        val trimmedId = extractVideoId(videoId) ?: videoId.trim()
+        if (trimmedId.length != 11) return@withContext null
+
+        val clientObj = JsonObject().apply {
+            addProperty("clientName", "ANDROID")
+            addProperty("clientVersion", "21.26.364")
+            addProperty("androidSdkVersion", 30)
+            addProperty("userAgent", "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip")
+            addProperty("hl", "en")
+            addProperty("gl", "US")
+        }
+        val payload = JsonObject().apply {
+            add("context", JsonObject().apply { add("client", clientObj) })
+            addProperty("videoId", trimmedId)
+        }
+
+        try {
+            val request = Request.Builder()
+                .url(PLAYER_URL)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext null
+
+            val body = response.body.string()
+            val json = JsonParser.parseString(body).asJsonObject
+            val vd = json.getAsJsonObject("videoDetails") ?: return@withContext null
+
+            val rawTitle = vd.get("title")?.asString.orEmpty()
+            val rawAuthor = vd.get("author")?.asString.orEmpty()
+            val lengthSec = vd.get("lengthSeconds")?.asLong ?: 0L
+            val durMs = lengthSec * 1000L
+            if (durMs > 0) {
+                videoDurationCache[trimmedId] = durMs
+            }
+
+            val (cleanT, cleanA) = cleanTitleAndArtist(rawTitle, rawAuthor)
+            val thumbUrl = "https://i.ytimg.com/vi/$trimmedId/hqdefault.jpg"
+            val highResThumb = upgradeArtworkUrl(thumbUrl, trimmedId)
+
+            YouTubeTrack(
+                videoId = trimmedId,
+                title = cleanT,
+                artist = cleanA,
+                durationMs = durMs,
+                thumbnailUrl = highResThumb
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "fetchPlayerVideoDetails failed for $trimmedId")
             null
         }
     }
@@ -896,7 +959,13 @@ class InnerTubeParser @Inject constructor(
             return@withContext oEmbedMeta
         }
 
-        // 2. Fallback to InnerTube search
+        // 2. Try player videoDetails (exact metadata even for restricted videos)
+        val playerMeta = fetchPlayerVideoDetails(trimmedId)
+        if (playerMeta != null && playerMeta.title.isNotBlank()) {
+            return@withContext playerMeta
+        }
+
+        // 3. Fallback to InnerTube search
         val payload = JsonObject().apply {
             add("context", createWebRemixContext(region))
             addProperty("query", trimmedId)
@@ -1086,17 +1155,87 @@ class InnerTubeParser @Inject constructor(
     }
 
     /**
+     * Resolves a direct audio stream URL with multi-source fallback.
+     * Tries direct YouTube stream first, then Monochrome Hi-Fi FLAC, then verified YouTube alternative.
+     */
+    suspend fun resolveStreamUrlWithFallback(videoId: String): String? = withContext(Dispatchers.IO) {
+        val direct = getAudioStreamUrl(videoId)
+        if (!direct.isNullOrBlank()) return@withContext direct
+
+        val meta = parseSong(videoId)
+        if (meta != null) {
+            val (cleanTitle, cleanArtist) = cleanTitleAndArtist(meta.title, meta.artist)
+            val dur = videoDurationCache[videoId] ?: meta.durationMs
+            try {
+                val mono = multiSourceAudioEngine.resolveMonochromeFlac(cleanTitle, cleanArtist, dur)
+                if (mono != null) {
+                    Timber.i("Fallback resolved to Monochrome Hi-Fi stream for $videoId ($cleanTitle)")
+                    return@withContext mono.streamUrl
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Fallback Monochrome resolution failed for $videoId")
+            }
+
+            val alt = findPlayableAlternative(cleanTitle, cleanArtist, dur, videoId)
+            if (alt != null) {
+                Timber.i("Fallback resolved to alternative YouTube stream ${alt.first} for $videoId")
+                return@withContext alt.second
+            }
+        }
+        null
+    }
+
+    /**
      * Resolves a YouTubeTrack into a fully playable Song model with direct stream URL.
+     * Prioritizes Monochrome Hi-Fi Studio Master (24-bit/96kHz Lossless FLAC),
+     * falling back to unthrottled YouTube InnerTube streams with verified clickbait/region filtering.
      */
     suspend fun resolvePlayableSong(track: YouTubeTrack): Song? = withContext(Dispatchers.IO) {
+        val targetDur = videoDurationCache[track.videoId] ?: track.durationMs
+        val (cleanTitle, cleanArtist) = cleanTitleAndArtist(track.title, track.artist)
+        val highResThumb = upgradeArtworkUrl(track.thumbnailUrl, track.videoId)
+
+        // 1. First priority: Studio Master Lossless FLAC via Monochrome Hi-Fi (tracks.monochrome.st)
+        val monoFlac = try {
+            multiSourceAudioEngine.resolveMonochromeFlac(
+                title = cleanTitle,
+                artist = cleanArtist,
+                targetDurationMs = targetDur
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Error resolving Monochrome stream for ${track.title}")
+            null
+        }
+
+        if (monoFlac != null) {
+            Timber.i("Resolved Studio Master FLAC stream via Monochrome for '$cleanTitle' by '$cleanArtist': ${monoFlac.streamUrl}")
+            return@withContext Song(
+                id = "mono_${track.videoId}",
+                title = cleanTitle,
+                artist = cleanArtist,
+                artistId = cleanArtist.hashCode().toLong(),
+                artists = listOf(ArtistRef(id = cleanArtist.hashCode().toLong(), name = cleanArtist, isPrimary = true)),
+                album = track.album ?: "Hi-Fi Studio Master",
+                albumId = (track.album ?: "Hi-Fi Studio Master").hashCode().toLong(),
+                path = monoFlac.streamUrl,
+                contentUriString = monoFlac.streamUrl,
+                albumArtUriString = highResThumb,
+                duration = if (monoFlac.durationMs > 0) monoFlac.durationMs else targetDur,
+                genre = "Monochrome Hi-Fi (FLAC)",
+                mimeType = "audio/flac",
+                bitrate = monoFlac.bitrate,
+                sampleRate = 96000
+            )
+        }
+
+        // 2. Second priority: Direct YouTube stream
         var streamUrl = getAudioStreamUrl(track.videoId)
         var usedVideoId = track.videoId
         var resolvedThumb = track.thumbnailUrl
 
-        // If direct stream fails (e.g. region-restricted or deleted video), find verified alternative
+        // 3. Third priority: If direct stream fails (region-restricted), search verified alternative
         if (streamUrl.isNullOrBlank()) {
-            Timber.w("Direct stream failed for ${track.videoId}, searching verified alternative for: ${track.artist} - ${track.title}")
-            val targetDur = videoDurationCache[track.videoId] ?: track.durationMs
+            Timber.w("Direct stream failed for ${track.videoId}, searching verified alternative for: $cleanArtist - $cleanTitle")
             val alt = findPlayableAlternative(
                 targetTitle = track.title,
                 targetArtist = track.artist,
@@ -1113,8 +1252,7 @@ class InnerTubeParser @Inject constructor(
         if (streamUrl.isNullOrBlank()) return@withContext null
 
         val songId = "yt_$usedVideoId"
-        val (cleanTitle, cleanArtist) = cleanTitleAndArtist(track.title, track.artist)
-        val highResThumb = upgradeArtworkUrl(resolvedThumb, usedVideoId)
+        val altHighResThumb = upgradeArtworkUrl(resolvedThumb, usedVideoId)
 
         Song(
             id = songId,
@@ -1126,8 +1264,8 @@ class InnerTubeParser @Inject constructor(
             albumId = (track.album ?: "YouTube Music").hashCode().toLong(),
             path = streamUrl,
             contentUriString = streamUrl,
-            albumArtUriString = highResThumb,
-            duration = track.durationMs,
+            albumArtUriString = altHighResThumb,
+            duration = targetDur,
             genre = "YouTube Music",
             mimeType = "video/mp4",
             bitrate = 160000,

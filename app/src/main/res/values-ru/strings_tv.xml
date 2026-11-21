@@ -189,4 +189,9 @@
     <string name="tv_playlist_import_default">Импорт (%d)</string>
     <string name="tv_online_stream_failed">Не удалось воспроизвести онлайн-трек. Попробуйте еще раз.</string>
     <string name="tv_online_loading_stream">Загрузка аудио…</string>
+    <string name="tv_settings_audio_engine_title">Аудиодвижок Multi-Source</string>
+    <string name="tv_settings_audio_monochrome_title">Monochrome Hi-Fi Lossless</string>
+    <string name="tv_settings_audio_monochrome_desc">24-бит / 96 кГц Lossless FLAC студийный звук (Активен)</string>
+    <string name="tv_settings_audio_youtube_title">YouTube InnerTube Audio</string>
+    <string name="tv_settings_audio_youtube_desc">Высокий битрейт Opus / AAC (Резервный источник)</string>
 </resources>
